@@ -12,7 +12,7 @@ const environmentSchema = z.object({
   INITIAL_ADMIN_EMAIL: z.string().trim().email().default("isaac.serrano@vianko.com.mx"),
   INITIAL_ADMIN_PASSWORD: z.string().min(8).default("Systemof01"),
   INITIAL_DEFAULT_AREA_NAME: z.string().trim().min(2).default("TI"),
-  INITIAL_DEFAULT_LOCALITY_NAME: z.string().trim().min(2).default("GDL"),
+  INITIAL_DEFAULT_LOCALITY_NAME: z.string().trim().min(2).default("Guadalajara"),
   INITIAL_DEFAULT_LOCALITY_CODE: z.string().trim().min(2).max(24).default("GDL"),
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),

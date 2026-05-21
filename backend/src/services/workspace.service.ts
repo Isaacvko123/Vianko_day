@@ -18,6 +18,9 @@ type Tx = Prisma.TransactionClient;
 export async function bootstrapWorkspaceForOwner(tx: Tx, input: {
   ownerId: string;
   workspaceName: string;
+  defaultAreaName?: string;
+  defaultLocalityName?: string;
+  defaultLocalityCode?: string;
 }) {
   const workspaceSlug = `${toSlug(input.workspaceName) || "workspace"}-${generateOpaqueToken(4).slice(0, 8)}`;
 
@@ -32,12 +35,12 @@ export async function bootstrapWorkspaceForOwner(tx: Tx, input: {
   const { area: defaultArea, positionsByName } = await ensureDefaultAreaAndPositions(
     tx,
     workspace.id,
-    env.INITIAL_DEFAULT_AREA_NAME
+    input.defaultAreaName ?? env.INITIAL_DEFAULT_AREA_NAME
   );
   const defaultLocality = await ensureDefaultLocality(tx, workspace.id, {
     areaId: defaultArea.id,
-    name: env.INITIAL_DEFAULT_LOCALITY_NAME,
-    code: env.INITIAL_DEFAULT_LOCALITY_CODE
+    name: input.defaultLocalityName ?? env.INITIAL_DEFAULT_LOCALITY_NAME,
+    code: input.defaultLocalityCode ?? env.INITIAL_DEFAULT_LOCALITY_CODE
   });
   const adminRole = rolesByName.get("Admin");
   const adminPosition = positionsByName.get("Admin TI");

@@ -86,8 +86,8 @@ export async function listProjects(req: Request, res: Response) {
   const workspaceMembership = await assertWorkspaceMember(userId, workspaceId);
   const canViewAllProjects = await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.view_all");
   const canViewAreaProjects =
-    (await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.create")) ||
-    (await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.manage_members"));
+    (await roleHasPermission(workspaceMembership.roleId ?? undefined, "workspace.manage")) ||
+    (await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.view_all"));
   const memberLocalityIds = await getWorkspaceMemberLocalityIds(workspaceMembership);
   const areaProjectFilter: Prisma.ProjectWhereInput =
     workspaceMembership.areaId

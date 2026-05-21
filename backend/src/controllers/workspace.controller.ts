@@ -126,6 +126,28 @@ async function canManageWorkspaceStructure(roleId: string | undefined) {
   );
 }
 
+async function assertCanCreateWorkspace(userId: string) {
+  const memberships = await prisma.workspaceMember.findMany({
+    where: {
+      userId,
+      status: "ACTIVE"
+    },
+    select: {
+      roleId: true
+    }
+  });
+
+  for (const membership of memberships) {
+    const canCreateWorkspace = await roleHasPermission(membership.roleId ?? undefined, "workspace.manage");
+
+    if (canCreateWorkspace) {
+      return;
+    }
+  }
+
+  throw new AppError(403, "WORKSPACE_CREATE_DENIED", "Only Admin or Admin TI can create workspaces.");
+}
+
 function assertLocalityScope(scope: MemberManagementScope, selectedLocalityIds: string[]) {
   if (scope.canManageWorkspaceMembers || selectedLocalityIds.length === 0 || scope.requesterLocalityIds.length === 0) {
     return;
@@ -255,6 +277,37 @@ async function resolveDefaultRoleId(workspaceId: string, userType: "INTERNAL" | 
   return role.id;
 }
 
+type RoleWithPermissions = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  description?: string | null;
+  isSystem: boolean;
+  permissions?: Array<{
+    permission: {
+      key: string;
+    };
+  }>;
+};
+
+function rolePayload(role?: RoleWithPermissions) {
+  if (!role) {
+    return undefined;
+  }
+
+  return {
+    id: role.id,
+    workspaceId: role.workspaceId,
+    name: role.name,
+    description: role.description ?? undefined,
+    isSystem: role.isSystem
+  };
+}
+
+function permissionKeysFromRole(role?: RoleWithPermissions) {
+  return role?.permissions?.map((rolePermission) => rolePermission.permission.key) ?? [];
+}
+
 export async function listWorkspaces(req: Request, res: Response) {
   const userId = req.auth!.userId;
 
@@ -269,7 +322,19 @@ export async function listWorkspaces(req: Request, res: Response) {
     },
     include: {
       workspace: true,
-      role: true,
+      role: {
+        include: {
+          permissions: {
+            include: {
+              permission: {
+                select: {
+                  key: true
+                }
+              }
+            }
+          }
+        }
+      },
       area: true,
       locality: true,
       localityScopes: {
@@ -291,7 +356,8 @@ export async function listWorkspaces(req: Request, res: Response) {
       member: {
         userType: membership.userType,
         status: membership.status,
-        role: membership.role,
+        role: rolePayload(membership.role ?? undefined),
+        permissions: permissionKeysFromRole(membership.role ?? undefined),
         area: membership.area,
         locality: membership.locality,
         localityScopes: membership.localityScopes,
@@ -303,15 +369,81 @@ export async function listWorkspaces(req: Request, res: Response) {
 
 export async function createWorkspace(req: Request, res: Response) {
   const userId = req.auth!.userId;
+  await assertCanCreateWorkspace(userId);
 
   const result = await prisma.$transaction((tx) =>
     bootstrapWorkspaceForOwner(tx, {
       ownerId: userId,
-      workspaceName: req.body.name
+      workspaceName: req.body.name,
+      defaultAreaName: req.body.defaultAreaName,
+      defaultLocalityName: req.body.defaultLocalityName,
+      defaultLocalityCode: req.body.defaultLocalityCode
     })
   );
 
-  res.status(201).json(result);
+  const membership = await prisma.workspaceMember.findUnique({
+    where: {
+      workspaceId_userId: {
+        workspaceId: result.workspace.id,
+        userId
+      }
+    },
+    include: {
+      workspace: true,
+      role: {
+        include: {
+          permissions: {
+            include: {
+              permission: {
+                select: {
+                  key: true
+                }
+              }
+            }
+          }
+        }
+      },
+      area: true,
+      locality: true,
+      localityScopes: {
+        include: {
+          locality: true
+        },
+        orderBy: { createdAt: "asc" }
+      },
+      position: true
+    }
+  });
+
+  if (!membership) {
+    throw new AppError(500, "WORKSPACE_MEMBERSHIP_MISSING", "Workspace was created but owner membership was not found.");
+  }
+
+  emitRealtimeEvent({
+    type: "workspace.created",
+    workspaceId: result.workspace.id,
+    actorId: userId,
+    title: "Workspace creado",
+    message: `Se creo el workspace ${result.workspace.name}.`
+  });
+
+  res.status(201).json({
+    workspace: {
+      ...membership.workspace,
+      member: {
+        userType: membership.userType,
+        status: membership.status,
+        role: rolePayload(membership.role ?? undefined),
+        permissions: permissionKeysFromRole(membership.role ?? undefined),
+        area: membership.area,
+        locality: membership.locality,
+        localityScopes: membership.localityScopes,
+        position: membership.position
+      }
+    },
+    project: result.project,
+    board: result.board
+  });
 }
 
 export async function listWorkspaceMembers(req: Request, res: Response) {

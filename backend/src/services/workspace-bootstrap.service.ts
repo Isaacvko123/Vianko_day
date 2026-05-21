@@ -11,7 +11,12 @@ const DEFAULT_POSITIONS = [
   },
   {
     name: "Lider TI",
-    description: "Coordina soporte, usuarios y seguimiento tecnico sin crear proyectos.",
+    description: "Lider tecnico: crea, edita, asigna y da seguimiento sin visibilidad total.",
+    isManager: true
+  },
+  {
+    name: "Coordinador",
+    description: "Coordina proyectos propios o asignados con alcance similar a lider tecnico.",
     isManager: true
   },
   {

@@ -4,6 +4,7 @@ import { GuideDrawer } from "./GuideDrawer";
 import { Badge, Button, cx } from "./ui";
 import type { AuthSession, ViewKey, WorkspaceListItem } from "../types";
 import { initials } from "../lib/format";
+import { getWorkspaceCapabilities } from "../lib/permissions";
 
 type MainLayoutProps = {
   session: AuthSession;
@@ -25,10 +26,6 @@ const navItems: Array<{ key: ViewKey; label: string; icon: ReactNode }> = [
   { key: "reports", label: "Reportes", icon: <BarChart3 size={18} /> }
 ];
 
-function canSeeAdminViews(roleName?: string) {
-  return roleName === "Admin" || roleName === "Admin TI" || roleName === "Gerente";
-}
-
 export function MainLayout({
   session,
   workspace,
@@ -41,7 +38,7 @@ export function MainLayout({
   onLogout
 }: MainLayoutProps) {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
-  const visibleNavItems = canSeeAdminViews(workspace.member.role?.name)
+  const visibleNavItems = getWorkspaceCapabilities(workspace).canSeeAdminViews
     ? navItems
     : navItems.filter((item) => item.key === "projects" || item.key === "board");
 

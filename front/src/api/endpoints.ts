@@ -51,6 +51,13 @@ export type CreateProjectInput = {
   endDate?: string;
 };
 
+export type CreateWorkspaceInput = {
+  name: string;
+  defaultAreaName?: string;
+  defaultLocalityName?: string;
+  defaultLocalityCode?: string;
+};
+
 export type UpdateProjectInput = Partial<Omit<CreateProjectInput, "workspaceId">>;
 
 export type CreateTaskInput = {
@@ -195,6 +202,14 @@ export function logout(refreshToken: string) {
 
 export function listWorkspaces(token: string) {
   return apiRequest<{ workspaces: WorkspaceListItem[] }>("/workspaces", { token });
+}
+
+export function createWorkspace(token: string, input: CreateWorkspaceInput) {
+  return apiRequest<{ workspace: WorkspaceListItem; project: Project; board: Board }>("/workspaces", {
+    token,
+    method: "POST",
+    body: input
+  });
 }
 
 export function listProjects(token: string, workspaceId: string) {

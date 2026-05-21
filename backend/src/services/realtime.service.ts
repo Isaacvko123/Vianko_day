@@ -16,6 +16,7 @@ const realtimeJoinLimit = 60;
 
 export type RealtimeEventType =
   | "socket.join_denied"
+  | "workspace.created"
   | "workspace.user_invited"
   | "workspace.area_saved"
   | "workspace.locality_saved"

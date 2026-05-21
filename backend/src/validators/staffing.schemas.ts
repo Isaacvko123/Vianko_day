@@ -42,6 +42,6 @@ export const rejectStaffingRequestSchema = z.object({
     requestId: uuidParam
   }),
   body: z.object({
-    responseNote: z.string().trim().min(2).max(2000).optional()
+    responseNote: z.string().trim().min(2).max(2000)
   })
 });

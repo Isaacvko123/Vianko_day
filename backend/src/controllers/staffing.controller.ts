@@ -56,8 +56,7 @@ async function canManageAllStaffing(userId: string, workspaceId: string) {
   const member = await assertWorkspaceMember(userId, workspaceId);
   const canManage =
     (await roleHasPermission(member.roleId ?? undefined, "workspace.manage")) ||
-    (await roleHasPermission(member.roleId ?? undefined, "member.manage")) ||
-    (await roleHasPermission(member.roleId ?? undefined, "project.view_all"));
+    (await roleHasPermission(member.roleId ?? undefined, "member.manage"));
 
   return { member, canManage };
 }
@@ -244,14 +243,27 @@ export async function createStaffingRequest(req: Request, res: Response) {
           workspaceId: project.workspaceId,
           userId: requestedUserId
         }
+      },
+      include: {
+        localityScopes: {
+          select: {
+            localityId: true
+          }
+        }
       }
     });
+    const requestedMemberLocalityIds = requestedMember
+      ? [
+        ...(requestedMember.localityId ? [requestedMember.localityId] : []),
+        ...requestedMember.localityScopes.map((localityScope) => localityScope.localityId)
+      ]
+      : [];
 
     if (
       !requestedMember ||
       requestedMember.status !== "ACTIVE" ||
       requestedMember.areaId !== targetAreaId ||
-      (targetLocalityId && requestedMember.localityId !== targetLocalityId)
+      (targetLocalityId && !requestedMemberLocalityIds.includes(targetLocalityId))
     ) {
       throw new AppError(400, "REQUESTED_USER_INVALID", "Requested user must be active in the target area/locality.");
     }
@@ -320,19 +332,38 @@ export async function approveStaffingRequest(req: Request, res: Response) {
       workspaceId: staffingRequest.workspaceId,
       userId: { in: approvedUserIds },
       status: "ACTIVE",
-      areaId: staffingRequest.targetAreaId,
-      localityId: staffingRequest.targetLocalityId || undefined
+      areaId: staffingRequest.targetAreaId
+    },
+    include: {
+      localityScopes: {
+        select: {
+          localityId: true
+        }
+      }
     }
   });
+  const validActiveMembers = activeMembers.filter((member) => {
+    if (!staffingRequest.targetLocalityId) {
+      return true;
+    }
 
-  if (activeMembers.length !== approvedUserIds.length) {
+    const memberLocalityIds = [
+      ...(member.localityId ? [member.localityId] : []),
+      ...member.localityScopes.map((localityScope) => localityScope.localityId)
+    ];
+
+    return memberLocalityIds.includes(staffingRequest.targetLocalityId);
+  });
+  const activeMemberByUserId = new Map(validActiveMembers.map((member) => [member.userId, member]));
+
+  if (activeMemberByUserId.size !== approvedUserIds.length) {
     throw new AppError(400, "APPROVED_USERS_INVALID", "All approved users must be active in the target area/locality.");
   }
 
   const answeredAt = new Date();
   const updatedRequest = await prisma.$transaction(async (tx) => {
     for (const approvedUserId of approvedUserIds) {
-      const approvedMember = activeMembers.find((member) => member.userId === approvedUserId);
+      const approvedMember = activeMemberByUserId.get(approvedUserId);
 
       await tx.projectMember.upsert({
         where: {

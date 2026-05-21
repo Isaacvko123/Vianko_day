@@ -2494,6 +2494,18 @@ select:focus-visible {
   grid-column: 1 / -1;
 }
 
+.workspace-create-note {
+  grid-column: 1 / -1;
+  border: 1px solid rgba(37, 99, 235, 0.14);
+  border-radius: 10px;
+  background: var(--blue-soft);
+  color: var(--muted);
+  padding: 12px;
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1.45;
+}
+
 .member-edit-button {
   justify-content: center;
   min-height: 36px;
@@ -2660,6 +2672,130 @@ select:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+}
+
+.staffing-table-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  padding: 16px;
+  box-shadow: 0 14px 36px rgba(22, 32, 42, 0.06);
+}
+
+.staffing-table-card > header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.staffing-table-card h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 18px;
+}
+
+.staffing-table-card p {
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 750;
+  line-height: 1.4;
+}
+
+.staffing-table-card > header > span {
+  min-width: 40px;
+  border-radius: 8px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  padding: 8px 12px;
+  text-align: center;
+  font-weight: 950;
+}
+
+.staffing-table {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.staffing-table-head,
+.staffing-table-row {
+  min-width: 1060px;
+  display: grid;
+  grid-template-columns: 1.05fr 1.35fr 0.8fr 0.72fr 1.65fr;
+  gap: 12px;
+  align-items: start;
+}
+
+.staffing-table-history .staffing-table-head,
+.staffing-table-history .staffing-table-row {
+  grid-template-columns: 1.2fr 0.75fr 1.2fr 0.9fr 1.2fr;
+}
+
+.staffing-table-head {
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.staffing-table-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-muted);
+  padding: 12px;
+  animation: page-in 180ms ease both;
+}
+
+.staffing-table-row > div,
+.staffing-table-row > p {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+}
+
+.staffing-table-row strong {
+  overflow-wrap: anywhere;
+}
+
+.staffing-table-row small,
+.staffing-table-row p {
+  color: var(--muted);
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.staffing-table-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.staffing-inline-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(160px, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.staffing-inline-form select[multiple] {
+  min-height: 68px;
+}
+
+.compact-action {
+  min-height: 38px;
+  padding: 8px 11px;
+  white-space: nowrap;
+}
+
+.danger-soft {
+  border-color: rgba(220, 38, 38, 0.22);
+  color: #b91c1c;
 }
 
 .metric-grid {
@@ -3226,8 +3362,18 @@ select:focus-visible {
   .management-flow,
   .report-hero-panel,
   .report-time-panel,
-  .management-board {
+  .management-board,
+  .staffing-table-row,
+  .staffing-inline-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .staffing-table-head {
+    display: none;
+  }
+
+  .staffing-table-row {
+    min-width: 0;
   }
 
   .admin-overview {
@@ -3310,6 +3456,9 @@ select:focus-visible {
   .subtask-time-form,
   .task-access-panel form,
   .management-board,
+  .staffing-table-row,
+  .staffing-table-actions,
+  .staffing-inline-form,
   .project-grid,
   .subtask-progress,
   .subtask-item,
@@ -3378,7 +3527,8 @@ select:focus-visible {
   .task-composer,
   .detail-panel,
   .approval-panel,
-  .request-lane {
+  .request-lane,
+  .staffing-table-card {
     padding: 14px;
   }
 
@@ -3414,7 +3564,8 @@ select:focus-visible {
 
   .comment-card div,
   .report-list article,
-  .staffing-card header {
+  .staffing-card header,
+  .staffing-table-card > header {
     align-items: start;
     flex-direction: column;
   }

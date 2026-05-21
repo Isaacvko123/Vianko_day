@@ -7,6 +7,7 @@
     "dev": "npm run build && npm start",
     "watch": "tsc -p tsconfig.json --watch",
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
     "start": "node dist/src/server.js",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",

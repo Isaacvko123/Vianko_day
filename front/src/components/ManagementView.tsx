@@ -8,7 +8,6 @@ import {
   Plus,
   RefreshCw,
   Send,
-  UsersRound,
   X,
   XCircle
 } from "lucide-react";
@@ -24,6 +23,7 @@ type ManagementViewProps = {
   positions: Position[];
   roles: Role[];
   currentAreaId?: string;
+  canAnswerAllRequests: boolean;
   isLoading: boolean;
   onRefresh: () => void;
   onCreateStaffingRequest: (input: {
@@ -72,7 +72,13 @@ function statusLabel(status: StaffingRequest["status"]) {
 }
 
 function memberLabel(member: WorkspaceMember) {
-  return `${member.user.name} · ${member.position?.name ?? "Sin puesto"} · ${member.locality?.name ?? "Sin localidad"}`;
+  const localityNames = [
+    ...(member.locality?.name ? [member.locality.name] : []),
+    ...(member.localityScopes?.map((scope) => scope.locality.name) ?? [])
+  ];
+  const uniqueLocalityNames = [...new Set(localityNames)];
+
+  return `${member.user.name} · ${member.position?.name ?? "Sin puesto"} · ${uniqueLocalityNames.join(", ") || "Sin localidad"}`;
 }
 
 export function ManagementView({
@@ -84,6 +90,7 @@ export function ManagementView({
   positions,
   roles,
   currentAreaId,
+  canAnswerAllRequests,
   isLoading,
   onRefresh,
   onCreateStaffingRequest,
@@ -91,6 +98,7 @@ export function ManagementView({
   onRejectStaffingRequest
 }: ManagementViewProps) {
   const [selectedTargetAreaId, setSelectedTargetAreaId] = useState("");
+  const [selectedTargetLocalityId, setSelectedTargetLocalityId] = useState("");
   const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -104,6 +112,7 @@ export function ManagementView({
     [staffingRequests, currentAreaId]
   );
   const pendingRequests = staffingRequests.filter((request) => request.status === "PENDING");
+  const closedRequests = staffingRequests.filter((request) => request.status !== "PENDING");
   const approvedRequests = staffingRequests.filter((request) => request.status === "APPROVED");
   const targetPositions = selectedTargetAreaId
     ? positions.filter((position) => position.areaId === selectedTargetAreaId)
@@ -116,8 +125,36 @@ export function ManagementView({
     return members.filter((member) =>
       member.status === "ACTIVE" &&
       member.areaId === request.targetAreaId &&
-      (!request.targetLocalityId || member.localityId === request.targetLocalityId)
+      memberMatchesLocality(member, request.targetLocalityId)
     );
+  }
+
+  function memberMatchesLocality(member: WorkspaceMember, localityId?: string) {
+    if (!localityId) {
+      return true;
+    }
+
+    return member.localityId === localityId || Boolean(member.localityScopes?.some((scope) => scope.localityId === localityId));
+  }
+
+  function requestTargetLabel(request: StaffingRequest) {
+    const localityName = request.targetLocality?.name ?? "Cualquier localidad";
+    const positionName = request.position?.name ?? "Sin puesto especifico";
+    const requestedName = request.requestedUser?.name ? ` · ${request.requestedUser.name}` : "";
+
+    return `${request.targetArea.name} · ${localityName} · ${positionName}${requestedName}`;
+  }
+
+  function requestAssignmentsLabel(request: StaffingRequest) {
+    if (request.assignments.length === 0) {
+      return "Sin personas asignadas";
+    }
+
+    return request.assignments.map((assignment) => assignment.user.name).join(", ");
+  }
+
+  function canAnswerRequest(request: StaffingRequest) {
+    return canAnswerAllRequests || Boolean(currentAreaId && request.targetAreaId === currentAreaId);
   }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
@@ -144,6 +181,7 @@ export function ManagementView({
       });
       form.reset();
       setSelectedTargetAreaId("");
+      setSelectedTargetLocalityId("");
       setIsRequestModalOpen(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "No se pudo crear la solicitud.");
@@ -179,88 +217,11 @@ export function ManagementView({
       const responseNote = readFormString(form, "responseNote");
       await onRejectStaffingRequest({
         requestId,
-        responseNote: responseNote || undefined
+        responseNote
       });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "No se pudo rechazar la solicitud.");
     }
-  }
-
-  function renderRequestCard(request: StaffingRequest, mode: "incoming" | "outgoing") {
-    const candidates = candidatesForRequest(request);
-
-    return (
-      <article className={`staffing-card staffing-card-pro status-border-${request.status.toLowerCase()}`} key={request.id}>
-        <header>
-          <div>
-            <strong>{request.project.name}</strong>
-            <small>{request.targetArea.name}{request.targetLocality ? ` · ${request.targetLocality.name}` : ""}</small>
-          </div>
-          <em className={`status-pill status-${request.status.toLowerCase()}`}>{statusLabel(request.status)}</em>
-        </header>
-
-        <div className="request-meta-grid">
-          <span>
-            <small>Cantidad</small>
-            <strong>{request.quantity}</strong>
-          </span>
-          <span>
-            <small>Puesto</small>
-            <strong>{request.position?.name ?? "Sin especificar"}</strong>
-          </span>
-          <span>
-            <small>Rol</small>
-            <strong>{request.role?.name ?? "Rol del proyecto"}</strong>
-          </span>
-        </div>
-
-        <p className="muted">{request.note || request.responseNote || "Sin nota registrada."}</p>
-        <small>
-          {mode === "incoming" ? `Solicita ${request.requester.name}` : "Solicitud enviada"} · {formatDate(request.createdAt)}
-        </small>
-
-        {request.assignments.length > 0 ? (
-          <div className="assignment-list">
-            {request.assignments.map((assignment) => (
-              <span key={assignment.id}>{assignment.user.name}</span>
-            ))}
-          </div>
-        ) : undefined}
-
-        {request.status === "PENDING" && mode === "incoming" ? (
-          <div className="staffing-actions">
-            <form className="approval-form staffing-response" onSubmit={(event) => void handleApprove(event, request.id)}>
-              <label>
-                Personal disponible
-                <select name="approvedUserIds" multiple required>
-                  {candidates.map((member) => (
-                    <option key={member.userId} value={member.userId}>{memberLabel(member)}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Nota
-                <input name="responseNote" placeholder="Nota de aprobacion" />
-              </label>
-              <button className="primary-action" type="submit" disabled={candidates.length === 0}>
-                <CheckCircle2 size={17} />
-                Aceptar
-              </button>
-            </form>
-            <form className="approval-form staffing-response" onSubmit={(event) => void handleReject(event, request.id)}>
-              <label>
-                Motivo
-                <input name="responseNote" placeholder="Motivo opcional" />
-              </label>
-              <button className="secondary-action" type="submit">
-                <XCircle size={17} />
-                Rechazar
-              </button>
-            </form>
-          </div>
-        ) : undefined}
-      </article>
-    );
   }
 
   return (
@@ -323,25 +284,123 @@ export function ManagementView({
         </article>
       </section>
 
-      <section className="management-board">
-        <section className="request-lane" data-guide="management-incoming">
-          <header>
-            <h2><ArrowDownToLine size={18} /> Entrantes</h2>
-            <span>{incomingRequests.length}</span>
-          </header>
-          {isLoading ? <div className="empty-state">Cargando solicitudes...</div> : undefined}
-          {incomingRequests.map((request) => renderRequestCard(request, "incoming"))}
-          {!isLoading && incomingRequests.length === 0 ? <div className="empty-state">No hay solicitudes entrantes.</div> : undefined}
-        </section>
+      <section className="staffing-table-card" data-guide="management-incoming">
+        <header>
+          <div>
+            <h2><ArrowDownToLine size={18} /> Pendientes por responder</h2>
+            <p>Solicitudes abiertas, ligadas siempre a un proyecto concreto.</p>
+          </div>
+          <span>{pendingRequests.length}</span>
+        </header>
+        {isLoading ? <div className="empty-state">Cargando solicitudes...</div> : undefined}
+        {!isLoading && pendingRequests.length === 0 ? <div className="empty-state">No hay solicitudes pendientes.</div> : undefined}
+        {pendingRequests.length > 0 ? (
+          <div className="staffing-table" role="table" aria-label="Solicitudes pendientes">
+            <div className="staffing-table-head" role="row">
+              <span>Proyecto</span>
+              <span>Solicitud</span>
+              <span>Solicita</span>
+              <span>Fecha</span>
+              <span>Respuesta</span>
+            </div>
+            {pendingRequests.map((request) => {
+              const candidates = candidatesForRequest(request);
+              const canAnswer = canAnswerRequest(request);
 
-        <section className="request-lane" data-guide="management-outgoing">
-          <header>
-            <h2><Send size={18} /> Enviadas y visibles</h2>
-            <span>{outgoingRequests.length}</span>
-          </header>
-          {outgoingRequests.map((request) => renderRequestCard(request, "outgoing"))}
-          {!isLoading && outgoingRequests.length === 0 ? <div className="empty-state">No hay solicitudes enviadas.</div> : undefined}
-        </section>
+              return (
+                <article className="staffing-table-row" role="row" key={request.id}>
+                  <div>
+                    <strong>{request.project.name}</strong>
+                    <small>{request.project.area?.name ?? "Sin area"} · {request.project.locality?.name ?? "Sin localidad"}</small>
+                  </div>
+                  <div>
+                    <strong>{requestTargetLabel(request)}</strong>
+                    <small>{request.quantity} persona{request.quantity === 1 ? "" : "s"} · {request.role?.name ?? "Rol original"}</small>
+                    {request.note ? <p>{request.note}</p> : undefined}
+                  </div>
+                  <div>
+                    <strong>{request.requester.name}</strong>
+                    <small>{request.sourceArea?.name ?? "Sin area origen"}</small>
+                  </div>
+                  <div>
+                    <strong>{formatDate(request.createdAt)}</strong>
+                    <em className="status-pill status-pending">{statusLabel(request.status)}</em>
+                  </div>
+                  <div className="staffing-table-actions">
+                    {canAnswer ? (
+                      <>
+                        <form className="staffing-inline-form" onSubmit={(event) => void handleApprove(event, request.id)}>
+                          <select name="approvedUserIds" multiple required aria-label="Personal disponible">
+                            {candidates.map((member) => (
+                              <option key={member.userId} value={member.userId}>{memberLabel(member)}</option>
+                            ))}
+                          </select>
+                          <input name="responseNote" placeholder="Nota de aprobacion" />
+                          <button className="primary-action compact-action" type="submit" disabled={candidates.length === 0}>
+                            <CheckCircle2 size={16} />
+                            Aprobar
+                          </button>
+                        </form>
+                        <form className="staffing-inline-form" onSubmit={(event) => void handleReject(event, request.id)}>
+                          <input name="responseNote" placeholder="Motivo de rechazo" minLength={2} required />
+                          <button className="secondary-action compact-action danger-soft" type="submit">
+                            <XCircle size={16} />
+                            Rechazar
+                          </button>
+                        </form>
+                      </>
+                    ) : (
+                      <span className="muted">Esperando al gerente del area destino.</span>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        ) : undefined}
+      </section>
+
+      <section className="staffing-table-card" data-guide="management-outgoing">
+        <header>
+          <div>
+            <h2><ClipboardCheck size={18} /> Historial aprobado y rechazado</h2>
+            <p>Decisiones cerradas con personas asignadas o motivo de rechazo.</p>
+          </div>
+          <span>{closedRequests.length}</span>
+        </header>
+        {closedRequests.length === 0 ? <div className="empty-state">Aun no hay solicitudes cerradas.</div> : undefined}
+        {closedRequests.length > 0 ? (
+          <div className="staffing-table staffing-table-history" role="table" aria-label="Historial de solicitudes">
+            <div className="staffing-table-head" role="row">
+              <span>Proyecto</span>
+              <span>Resultado</span>
+              <span>Personal</span>
+              <span>Respondio</span>
+              <span>Motivo o nota</span>
+            </div>
+            {closedRequests.map((request) => (
+              <article className="staffing-table-row" role="row" key={request.id}>
+                <div>
+                  <strong>{request.project.name}</strong>
+                  <small>{requestTargetLabel(request)}</small>
+                </div>
+                <div>
+                  <em className={`status-pill status-${request.status.toLowerCase()}`}>{statusLabel(request.status)}</em>
+                  <small>{request.respondedAt ? formatDate(request.respondedAt) : "Sin fecha de cierre"}</small>
+                </div>
+                <div>
+                  <strong>{requestAssignmentsLabel(request)}</strong>
+                  <small>{request.quantity} solicitado{request.quantity === 1 ? "" : "s"}</small>
+                </div>
+                <div>
+                  <strong>{request.responder?.name ?? "Sin responsable"}</strong>
+                  <small>{request.targetArea.name}</small>
+                </div>
+                <p>{request.responseNote || request.note || "Sin nota registrada."}</p>
+              </article>
+            ))}
+          </div>
+        ) : undefined}
       </section>
 
       {isRequestModalOpen ? (
@@ -373,7 +432,10 @@ export function ManagementView({
                   name="targetAreaId"
                   required
                   value={selectedTargetAreaId}
-                  onChange={(event) => setSelectedTargetAreaId(event.currentTarget.value)}
+                  onChange={(event) => {
+                    setSelectedTargetAreaId(event.currentTarget.value);
+                    setSelectedTargetLocalityId("");
+                  }}
                 >
                   <option value="">Seleccionar</option>
                   {areas.map((area) => (
@@ -383,7 +445,12 @@ export function ManagementView({
               </label>
               <label>
                 Localidad destino
-                <select name="targetLocalityId" key={selectedTargetAreaId} defaultValue="">
+                <select
+                  name="targetLocalityId"
+                  key={selectedTargetAreaId}
+                  value={selectedTargetLocalityId}
+                  onChange={(event) => setSelectedTargetLocalityId(event.currentTarget.value)}
+                >
                   <option value="">Cualquier localidad</option>
                   {targetLocalities.map((locality) => (
                     <option key={locality.id} value={locality.id}>{locality.name}</option>
@@ -417,7 +484,10 @@ export function ManagementView({
                 <select name="requestedUserId" defaultValue="">
                   <option value="">Sin persona especifica</option>
                   {members
-                    .filter((member) => !selectedTargetAreaId || member.areaId === selectedTargetAreaId)
+                    .filter((member) =>
+                      (!selectedTargetAreaId || member.areaId === selectedTargetAreaId) &&
+                      memberMatchesLocality(member, selectedTargetLocalityId || undefined)
+                    )
                     .map((member) => (
                       <option key={member.userId} value={member.userId}>{memberLabel(member)}</option>
                     ))}

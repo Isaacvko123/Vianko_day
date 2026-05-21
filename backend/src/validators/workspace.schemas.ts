@@ -3,7 +3,10 @@ import { uuidParam } from "./common.schemas.js";
 
 export const createWorkspaceSchema = z.object({
   body: z.object({
-    name: z.string().trim().min(2).max(120)
+    name: z.string().trim().min(2).max(120),
+    defaultAreaName: z.string().trim().min(2).max(120).optional(),
+    defaultLocalityName: z.string().trim().min(2).max(120).optional(),
+    defaultLocalityCode: z.string().trim().min(2).max(24).transform((value) => value.toUpperCase()).optional()
   })
 });
 

@@ -37,9 +37,9 @@ async function assertCompletedTaskCanBeReopened(task: { completedAt: Date | unde
   }
 
   const canManageWorkspace = await roleHasPermission(roleId, "workspace.manage");
-  const canManageProjectMembers = await roleHasPermission(roleId, "project.manage_members");
+  const canReopenCompletedTasks = await roleHasPermission(roleId, "project.view_all");
 
-  if (!canManageWorkspace && !canManageProjectMembers) {
+  if (!canManageWorkspace && !canReopenCompletedTasks) {
     throw new AppError(403, "TASK_REOPEN_DENIED", "Only admin or area managers can reopen completed tasks.");
   }
 }

@@ -52,16 +52,11 @@ export const ROLE_DEFINITIONS: Array<{
     name: "Lider TI",
     description: "Coordina trabajo tecnico propio o asignado. Crea, edita y asigna sin ver todo el workspace.",
     permissions: [
-      "workspace.invite_users",
-      "area.approve_members",
-      "locality.manage",
-      "position.manage",
-      "member.manage",
       "project.create",
       "project.update",
       "project.manage_members",
       "project.request_staffing",
-      "staffing.respond",
+      "board.create",
       "board.update",
       "task.create",
       "task.update",
@@ -71,8 +66,7 @@ export const ROLE_DEFINITIONS: Array<{
       "task.comment",
       "task.log_time",
       "task.view_all",
-      "report.view_project",
-      "report.view_workspace"
+      "report.view_project"
     ]
   },
   {
@@ -104,16 +98,12 @@ export const ROLE_DEFINITIONS: Array<{
   },
   {
     name: "Coordinador",
-    description: "Coordina proyectos y actividades propias o asignadas, sin visibilidad total.",
+    description: "Coordina como lider tecnico: crea, edita y asigna solo en proyectos propios o donde participa.",
     permissions: [
-      "workspace.invite_users",
-      "area.approve_members",
-      "position.manage",
       "project.create",
       "project.update",
       "project.manage_members",
       "project.request_staffing",
-      "staffing.respond",
       "board.create",
       "board.update",
       "task.create",

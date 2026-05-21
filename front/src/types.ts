@@ -8,6 +8,35 @@ export type UserType = "INTERNAL" | "EXTERNAL";
 export type MemberStatus = "INVITED" | "PENDING_APPROVAL" | "ACTIVE" | "SUSPENDED" | "REMOVED";
 export type ProjectVisibility = "WORKSPACE" | "PRIVATE";
 export type StaffingRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+export type PermissionKey =
+  | "workspace.manage"
+  | "workspace.invite_users"
+  | "workspace.view_reports"
+  | "area.manage"
+  | "area.approve_members"
+  | "locality.manage"
+  | "position.manage"
+  | "member.manage"
+  | "project.create"
+  | "project.update"
+  | "project.delete"
+  | "project.view_all"
+  | "project.manage_members"
+  | "project.request_staffing"
+  | "staffing.respond"
+  | "board.create"
+  | "board.update"
+  | "task.create"
+  | "task.update"
+  | "task.update_progress"
+  | "task.delete"
+  | "task.assign"
+  | "task.change_status"
+  | "task.comment"
+  | "task.log_time"
+  | "task.view_all"
+  | "report.view_project"
+  | "report.view_workspace";
 
 export type AuthUser = {
   id: string;
@@ -92,6 +121,7 @@ export type WorkspaceListItem = Workspace & {
     userType: UserType;
     status: MemberStatus;
     role?: Role;
+    permissions?: PermissionKey[];
     area?: Area;
     locality?: Locality;
     localityScopes?: LocalityScope[];
