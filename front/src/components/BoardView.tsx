@@ -112,11 +112,16 @@ function TaskCard({
         </span>
       </div>
       <div className="task-card-actions">
-        <div className="task-assignees" aria-label="Asignados">
-          {(task.assignees ?? []).map((assignee) => (
-            <span key={assignee.id} title={assignee.user.name}>{initials(assignee.user.name)}</span>
-          ))}
-          {(task.assignees ?? []).length === 0 ? <em>Sin asignados</em> : undefined}
+        <div className="task-assignee-block" aria-label="Asignados">
+          <div className="task-assignees">
+            {(task.assignees ?? []).map((assignee) => (
+              <span key={assignee.id} title={`${assignee.user.name} · ${assignee.user.email}`}>{initials(assignee.user.name)}</span>
+            ))}
+            {(task.assignees ?? []).length === 0 ? <em>Sin asignados</em> : undefined}
+          </div>
+          {(task.assignees ?? []).length > 0 ? (
+            <small>{(task.assignees ?? []).map((assignee) => assignee.user.name).join(", ")}</small>
+          ) : undefined}
         </div>
         <select
           value={task.statusId}

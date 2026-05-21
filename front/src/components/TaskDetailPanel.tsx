@@ -38,6 +38,10 @@ type TaskDetailPanelProps = {
 
 type DetailTab = "summary" | "plan" | "subtasks" | "events" | "comments" | "time";
 
+type VisibleTimeLog = TimeLog & {
+  sourceTitle: string;
+};
+
 function readFormString(form: HTMLFormElement, fieldName: string) {
   const value = new FormData(form).get(fieldName);
   return typeof value === "string" ? value.trim() : "";
@@ -216,6 +220,18 @@ export function TaskDetailPanel({
   const totalMinutes = timeLogs.reduce((sum, log) => sum + log.minutes, 0);
   const subtaskMinutes = subtasks.reduce((sum, subtask) => sum + getTaskLoggedMinutes(subtask), 0);
   const completeWorkMinutes = totalMinutes + subtaskMinutes;
+  const visibleTimeLogs: VisibleTimeLog[] = [
+    ...timeLogs.map((log) => ({
+      ...log,
+      sourceTitle: "Actividad principal"
+    })),
+    ...subtasks.flatMap((subtask) =>
+      (subtask.timeLogs ?? []).map((log) => ({
+        ...log,
+        sourceTitle: subtask.title
+      }))
+    )
+  ];
   const isCurrentTaskDone = Boolean(task?.completedAt || currentStatus?.countsAsDone);
   const isLockedForCurrentUser = isCurrentTaskDone && !canModifyCompletedTask;
   const isPlanningLocked = isLockedForCurrentUser || !canEditPlanning;
@@ -225,7 +241,7 @@ export function TaskDetailPanel({
   const subtaskProgress = subtasks.length > 0 ? Math.round((completedSubtasks / subtasks.length) * 100) : 0;
   const participantNames = task ? getAssigneeNames(task) : "Sin asignados";
   const timeByUser = Array.from(
-    timeLogs.reduce((rows, log) => {
+    visibleTimeLogs.reduce((rows, log) => {
       const userName = log.user?.name ?? "Usuario sin nombre";
       const currentMinutes = rows.get(userName) ?? 0;
       rows.set(userName, currentMinutes + log.minutes);
@@ -699,15 +715,15 @@ export function TaskDetailPanel({
               {timeByUser.length === 0 ? <small>Aun no hay tiempo por persona.</small> : undefined}
             </div>
             <div className="time-list">
-              {timeLogs.map((log) => (
-                <article key={log.id}>
+              {visibleTimeLogs.map((log) => (
+                <article key={`${log.sourceTitle}-${log.id}`}>
                   <strong>{formatMinutes(log.minutes)}</strong>
                   <span>{log.note || "Sin nota"}</span>
                   <em>{log.user?.name ?? "Usuario sin nombre"}</em>
-                  <small>{formatDate(log.logDate)}</small>
+                  <small>{log.sourceTitle} · {formatDate(log.logDate)}</small>
                 </article>
               ))}
-              {!isLoading && timeLogs.length === 0 ? <EmptyState title="Sin tiempo registrado" description="Registra minutos trabajados para alimentar reportes y estimado real." /> : undefined}
+              {!isLoading && visibleTimeLogs.length === 0 ? <EmptyState title="Sin tiempo registrado" description="Registra minutos trabajados para alimentar reportes y estimado real." /> : undefined}
             </div>
             {isLockedForCurrentUser ? (
               <p className="locked-inline">Tiempo cerrado porque la actividad ya fue terminada.</p>
