@@ -17,6 +17,8 @@ export function ReportsView({ summary, isLoading, onRefresh }: ReportsViewProps)
   const blockedTasks = projects.reduce((sum, project) => sum + project.blocked_tasks, 0);
   const overdueTasks = projects.reduce((sum, project) => sum + project.overdue_tasks, 0);
   const totalMinutes = users.reduce((sum, user) => sum + user.total_minutes, 0);
+  const estimatedMinutes = projects.reduce((sum, project) => sum + (project.estimate_minutes ?? 0), 0);
+  const pendingMinutes = Math.max(estimatedMinutes - totalMinutes, 0);
   const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
   const atRiskProjects = projects.filter((project) => project.blocked_tasks > 0 || project.overdue_tasks > 0);
   const topProject = [...projects].sort((first, second) => (second.progress_percent ?? 0) - (first.progress_percent ?? 0))[0];
@@ -61,6 +63,24 @@ export function ReportsView({ summary, isLoading, onRefresh }: ReportsViewProps)
         <StatCard icon={<Clock3 size={18} />} label="Horas" value={formatMinutes(totalMinutes)} tone="blue" />
       </section>
 
+      <section className="report-time-panel">
+        <article>
+          <span>Estimado total</span>
+          <strong>{formatMinutes(estimatedMinutes)}</strong>
+          <small>Incluye actividades principales y subtareas planeadas.</small>
+        </article>
+        <article>
+          <span>Tiempo invertido</span>
+          <strong>{formatMinutes(totalMinutes)}</strong>
+          <small>Registrado por usuarios en actividades y subtareas.</small>
+        </article>
+        <article className={pendingMinutes > 0 ? "warning" : "ok"}>
+          <span>Balance operativo</span>
+          <strong>{pendingMinutes > 0 ? formatMinutes(pendingMinutes) : "Estimado cubierto"}</strong>
+          <small>{pendingMinutes > 0 ? "Tiempo estimado aun no consumido." : "El tiempo real ya cubrio o supero la estimacion."}</small>
+        </article>
+      </section>
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
         <Card className="grid gap-4 p-5" data-guide="reports-projects">
           <h2 className="flex items-center gap-2 text-lg font-black text-slate-950"><BarChart3 size={18} /> Avance por proyecto</h2>
@@ -69,7 +89,10 @@ export function ReportsView({ summary, isLoading, onRefresh }: ReportsViewProps)
               <article className={project.overdue_tasks > 0 || project.blocked_tasks > 0 ? "report-row at-risk" : "report-row"} key={project.project_id}>
                 <div>
                   <strong>{project.project_name}</strong>
-                  <small>{project.completed_tasks}/{project.total_tasks} terminadas · {project.blocked_tasks} bloqueadas · {project.overdue_tasks} vencidas</small>
+                  <small>
+                    {project.completed_tasks}/{project.total_tasks} terminadas · {project.blocked_tasks} bloqueadas · {project.overdue_tasks} vencidas
+                    {" · "}Estimado {formatMinutes(project.estimate_minutes ?? 0)} · Real {formatMinutes(project.actual_minutes ?? 0)}
+                  </small>
                 </div>
                 <div className="progress-track">
                   <span style={{ width: `${project.progress_percent ?? 0}%` }} />
@@ -90,7 +113,7 @@ export function ReportsView({ summary, isLoading, onRefresh }: ReportsViewProps)
               <article key={user.user_id}>
                 <div>
                   <strong>#{index + 1} {user.name}</strong>
-                  <small>{user.completed_tasks} actividades terminadas</small>
+                  <small>{user.completed_tasks} terminadas · {user.active_tasks} activas · {user.assigned_tasks} asignadas</small>
                 </div>
                 <em>{formatMinutes(user.total_minutes)}</em>
               </article>

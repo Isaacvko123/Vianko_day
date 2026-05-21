@@ -89,9 +89,35 @@ type AppNotification = {
   createdAt: string;
 };
 
+type RealtimeRefreshPlan = {
+  workspaces: boolean;
+  projects: boolean;
+  catalog: boolean;
+  members: boolean;
+  management: boolean;
+  reports: boolean;
+  projectId?: string;
+  taskId?: string;
+};
+
+type LoadOptions = {
+  silent?: boolean;
+};
+
 function isLoginRoute() {
   const normalizedPath = window.location.pathname.replace(/\/+$/, "");
   return normalizedPath === "/login" || window.location.hash === "#/login";
+}
+
+function emptyRealtimeRefreshPlan(): RealtimeRefreshPlan {
+  return {
+    workspaces: false,
+    projects: false,
+    catalog: false,
+    members: false,
+    management: false,
+    reports: false
+  };
 }
 
 function getBrowserNotificationPermission(): NotificationPermissionState {
@@ -142,10 +168,11 @@ export function App() {
   const realtimeSocketRef = useRef<RealtimeSocket>();
   const activeProjectIdRef = useRef<string>();
   const selectedTaskIdRef = useRef<string>();
-  const currentViewRef = useRef<ViewKey>("projects");
   const joinedWorkspaceIdRef = useRef<string>();
   const joinedProjectIdRef = useRef<string>();
   const joinedTaskIdRef = useRef<string>();
+  const realtimeRefreshTimerRef = useRef<number>();
+  const pendingRealtimeRefreshRef = useRef<RealtimeRefreshPlan>(emptyRealtimeRefreshPlan());
 
   const token = session?.tokens.accessToken;
   const activeBoard = boards.find((board) => board.id === activeBoardId) ?? boards[0];
@@ -168,7 +195,13 @@ export function App() {
       const response = await listWorkspaces(sessionForRequest.tokens.accessToken);
       setWorkspaces(response.workspaces);
 
-      if (selectedWorkspace && response.workspaces.some((workspace) => workspace.id === selectedWorkspace.id)) {
+      const refreshedSelectedWorkspace = selectedWorkspace
+        ? response.workspaces.find((workspace) => workspace.id === selectedWorkspace.id)
+        : undefined;
+
+      if (refreshedSelectedWorkspace) {
+        setSelectedWorkspace(refreshedSelectedWorkspace);
+        storeWorkspace(refreshedSelectedWorkspace);
         return;
       }
 
@@ -184,39 +217,48 @@ export function App() {
     }
   }
 
-  async function loadProjects() {
+  async function loadProjects(options: LoadOptions = {}) {
     if (!token || !workspaceId) {
       return;
     }
 
-    setIsLoadingProjects(true);
-    setGlobalError("");
+    if (!options.silent) {
+      setIsLoadingProjects(true);
+      setGlobalError("");
+    }
 
     try {
       const response = await listProjects(token, workspaceId);
       setProjects(response.projects);
 
-      const currentProjectStillExists = activeProjectId
-        ? response.projects.some((project) => project.id === activeProjectId)
+      const currentProjectId = activeProjectIdRef.current;
+      const currentProjectStillExists = currentProjectId
+        ? response.projects.some((project) => project.id === currentProjectId)
         : false;
 
       if (!currentProjectStillExists) {
         setActiveProjectId(response.projects[0]?.id);
       }
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar proyectos.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar proyectos.");
+      }
     } finally {
-      setIsLoadingProjects(false);
+      if (!options.silent) {
+        setIsLoadingProjects(false);
+      }
     }
   }
 
-  async function loadProjectContext(projectId: string) {
+  async function loadProjectContext(projectId: string, options: LoadOptions = {}) {
     if (!token) {
       return;
     }
 
-    setIsLoadingBoard(true);
-    setGlobalError("");
+    if (!options.silent) {
+      setIsLoadingBoard(true);
+      setGlobalError("");
+    }
 
     try {
       const projectResponse = await getProject(token, projectId);
@@ -248,18 +290,24 @@ export function App() {
         setSelectedTaskId(undefined);
       }
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudo cargar el tablero.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudo cargar el tablero.");
+      }
     } finally {
-      setIsLoadingBoard(false);
+      if (!options.silent) {
+        setIsLoadingBoard(false);
+      }
     }
   }
 
-  async function loadSelectedTaskDetail(taskId: string) {
+  async function loadSelectedTaskDetail(taskId: string, options: LoadOptions = {}) {
     if (!token) {
       return;
     }
 
-    setIsLoadingDetail(true);
+    if (!options.silent) {
+      setIsLoadingDetail(true);
+    }
 
     try {
       const [commentResponse, timeResponse, subtaskResponse] = await Promise.all([
@@ -278,18 +326,24 @@ export function App() {
         setTaskEvents([]);
       }
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudo cargar el detalle de actividad.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudo cargar el detalle de actividad.");
+      }
     } finally {
-      setIsLoadingDetail(false);
+      if (!options.silent) {
+        setIsLoadingDetail(false);
+      }
     }
   }
 
-  async function loadMembers() {
+  async function loadMembers(options: LoadOptions = {}) {
     if (!token || !workspaceId) {
       return;
     }
 
-    setIsLoadingMembers(true);
+    if (!options.silent) {
+      setIsLoadingMembers(true);
+    }
 
     try {
       const [memberResponse, pendingResponse, roleResponse, areaResponse, localityResponse, positionResponse] = await Promise.all([
@@ -307,13 +361,17 @@ export function App() {
       setLocalities(localityResponse.localities);
       setPositions(positionResponse.positions);
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar miembros.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar miembros.");
+      }
     } finally {
-      setIsLoadingMembers(false);
+      if (!options.silent) {
+        setIsLoadingMembers(false);
+      }
     }
   }
 
-  async function loadWorkspaceCatalog() {
+  async function loadWorkspaceCatalog(options: LoadOptions = {}) {
     if (!token || !workspaceId) {
       return;
     }
@@ -342,32 +400,42 @@ export function App() {
         }
       }
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar areas y puestos.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar areas y puestos.");
+      }
     }
   }
 
-  async function loadReports() {
+  async function loadReports(options: LoadOptions = {}) {
     if (!token || !workspaceId) {
       return;
     }
 
-    setIsLoadingReports(true);
+    if (!options.silent) {
+      setIsLoadingReports(true);
+    }
 
     try {
       setSummary(await getWorkspaceSummary(token, workspaceId));
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar reportes.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudieron cargar reportes.");
+      }
     } finally {
-      setIsLoadingReports(false);
+      if (!options.silent) {
+        setIsLoadingReports(false);
+      }
     }
   }
 
-  async function loadManagement() {
+  async function loadManagement(options: LoadOptions = {}) {
     if (!token || !workspaceId) {
       return;
     }
 
-    setIsLoadingManagement(true);
+    if (!options.silent) {
+      setIsLoadingManagement(true);
+    }
 
     try {
       const [staffingResponse, memberResponse, areaResponse, localityResponse, positionResponse, roleResponse] = await Promise.all([
@@ -385,9 +453,13 @@ export function App() {
       setPositions(positionResponse.positions);
       setRoles(roleResponse.roles);
     } catch (error) {
-      setGlobalError(error instanceof Error ? error.message : "No se pudo cargar gerencia.");
+      if (!options.silent) {
+        setGlobalError(error instanceof Error ? error.message : "No se pudo cargar gerencia.");
+      }
     } finally {
-      setIsLoadingManagement(false);
+      if (!options.silent) {
+        setIsLoadingManagement(false);
+      }
     }
   }
 
@@ -427,36 +499,82 @@ export function App() {
     }
   }
 
+  function mergeRealtimeRefreshPlan(nextPlan: Partial<RealtimeRefreshPlan>) {
+    const currentPlan = pendingRealtimeRefreshRef.current;
+    pendingRealtimeRefreshRef.current = {
+      workspaces: currentPlan.workspaces || nextPlan.workspaces === true,
+      projects: currentPlan.projects || nextPlan.projects === true,
+      catalog: currentPlan.catalog || nextPlan.catalog === true,
+      members: currentPlan.members || nextPlan.members === true,
+      management: currentPlan.management || nextPlan.management === true,
+      reports: currentPlan.reports || nextPlan.reports === true,
+      projectId: nextPlan.projectId ?? currentPlan.projectId,
+      taskId: nextPlan.taskId ?? currentPlan.taskId
+    };
+  }
+
+  function flushRealtimeRefresh() {
+    const plan = pendingRealtimeRefreshRef.current;
+    pendingRealtimeRefreshRef.current = emptyRealtimeRefreshPlan();
+    realtimeRefreshTimerRef.current = undefined;
+
+    if (plan.workspaces) {
+      void loadWorkspaces();
+    }
+
+    if (plan.projects) {
+      void loadProjects({ silent: true });
+    }
+
+    if (plan.catalog) {
+      void loadWorkspaceCatalog({ silent: true });
+    }
+
+    if (plan.members) {
+      void loadMembers({ silent: true });
+    }
+
+    if (plan.management) {
+      void loadManagement({ silent: true });
+    }
+
+    if (plan.reports) {
+      void loadReports({ silent: true });
+    }
+
+    if (plan.projectId) {
+      void loadProjectContext(plan.projectId, { silent: true });
+    }
+
+    if (plan.taskId) {
+      void loadSelectedTaskDetail(plan.taskId, { silent: true });
+    }
+  }
+
+  function queueRealtimeRefresh(event: RealtimeEvent) {
+    const canLoadManagementData = canManageProjectMembers(selectedWorkspace?.member.role?.name);
+
+    mergeRealtimeRefreshPlan({
+      workspaces: event.type.startsWith("workspace."),
+      projects: true,
+      catalog: true,
+      members: canLoadManagementData,
+      management: canLoadManagementData,
+      reports: true,
+      projectId: activeProjectIdRef.current,
+      taskId: selectedTaskIdRef.current
+    });
+
+    if (realtimeRefreshTimerRef.current) {
+      window.clearTimeout(realtimeRefreshTimerRef.current);
+    }
+
+    realtimeRefreshTimerRef.current = window.setTimeout(flushRealtimeRefresh, 220);
+  }
+
   function handleRealtimeEvent(event: RealtimeEvent) {
     pushRealtimeNotification(event);
-
-    if (event.type.startsWith("project.") || event.type.startsWith("board.")) {
-      void loadProjects();
-    }
-
-    if (event.type.startsWith("workspace.")) {
-      void loadWorkspaceCatalog();
-
-      if (currentViewRef.current === "members") {
-        void loadMembers();
-      }
-    }
-
-    if (event.type.startsWith("staffing.") && currentViewRef.current === "management") {
-      void loadManagement();
-    }
-
-    if (event.projectId && event.projectId === activeProjectIdRef.current) {
-      void loadProjectContext(event.projectId);
-    }
-
-    if (event.taskId && event.taskId === selectedTaskIdRef.current) {
-      void loadSelectedTaskDetail(event.taskId);
-    }
-
-    if (currentViewRef.current === "reports" && (event.type.startsWith("task.") || event.type.startsWith("time."))) {
-      void loadReports();
-    }
+    queueRealtimeRefresh(event);
   }
 
   function handleRealtimeError(error: RealtimeClientError) {
@@ -510,8 +628,7 @@ export function App() {
   useEffect(() => {
     activeProjectIdRef.current = activeProjectId;
     selectedTaskIdRef.current = selectedTaskId;
-    currentViewRef.current = currentView;
-  }, [activeProjectId, selectedTaskId, currentView]);
+  }, [activeProjectId, selectedTaskId]);
 
   useEffect(() => {
     if (!token || !workspaceId) {
@@ -548,7 +665,12 @@ export function App() {
       socket.off("realtime:event", handleRealtimeEvent);
       socket.off("realtime:error", handleRealtimeError);
       socket.disconnect();
+      if (realtimeRefreshTimerRef.current) {
+        window.clearTimeout(realtimeRefreshTimerRef.current);
+      }
       realtimeSocketRef.current = undefined;
+      realtimeRefreshTimerRef.current = undefined;
+      pendingRealtimeRefreshRef.current = emptyRealtimeRefreshPlan();
       joinedWorkspaceIdRef.current = undefined;
       joinedProjectIdRef.current = undefined;
       joinedTaskIdRef.current = undefined;
@@ -707,6 +829,7 @@ export function App() {
     title: string;
     description?: string;
     priority: TaskPriority;
+    startAt?: string;
     dueAt?: string;
     estimateMinutes?: number;
     assigneeIds: string[];
@@ -727,6 +850,7 @@ export function App() {
       title: input.title,
       description: input.description,
       priority: input.priority,
+      startAt: input.startAt,
       dueAt: input.dueAt,
       estimateMinutes: input.estimateMinutes,
       assigneeIds: input.assigneeIds
@@ -813,6 +937,35 @@ export function App() {
           ? currentSubtasks.map((subtask) => subtask.id === taskId ? mergedTask : subtask)
           : [mergedTask, ...currentSubtasks];
       });
+    }
+  }
+
+  async function handleCreateSubtaskTimeLog(taskId: string, minutes: number, note?: string) {
+    if (!token) {
+      throw new Error("Sesion no disponible.");
+    }
+
+    const response = await createTimeLog(token, taskId, minutes, note);
+    setSubtasks((currentSubtasks) =>
+      currentSubtasks.map((subtask) => {
+        if (subtask.id !== taskId) {
+          return subtask;
+        }
+
+        return {
+          ...subtask,
+          timeLogs: [response.timeLog, ...(subtask.timeLogs ?? [])],
+          _count: {
+            comments: subtask._count?.comments ?? 0,
+            subtasks: subtask._count?.subtasks ?? 0,
+            timeLogs: (subtask._count?.timeLogs ?? 0) + 1
+          }
+        };
+      })
+    );
+
+    if (selectedTaskIdRef.current) {
+      void loadSelectedTaskDetail(selectedTaskIdRef.current, { silent: true });
     }
   }
 
@@ -1170,11 +1323,14 @@ export function App() {
             currentUserId={session.user.id}
             canCreateSubtasks={canManageProjectMembers(selectedWorkspace.member.role?.name)}
             canMoveClosedTasks={canManageProjectMembers(selectedWorkspace.member.role?.name)}
+            canViewPlanning={canManageProjectMembers(selectedWorkspace.member.role?.name)}
+            canEditPlanning={canManageProjectMembers(selectedWorkspace.member.role?.name)}
             canModifyCompletedTask={selectedWorkspace.member.role?.name === "Admin" || selectedWorkspace.member.role?.name === "Admin TI"}
             onClose={() => setSelectedTaskId(undefined)}
             onUpdateTaskPlan={handleUpdateTaskPlan}
             onCreateSubtask={handleCreateSubtask}
             onSubtaskStatusChange={handleTaskStatusChange}
+            onCreateSubtaskTimeLog={handleCreateSubtaskTimeLog}
             onCreateComment={handleCreateComment}
             onCreateTimeLog={handleCreateTimeLog}
           />

@@ -16,6 +16,8 @@ type TaskDetailPanelProps = {
   currentUserId: string;
   canCreateSubtasks: boolean;
   canMoveClosedTasks: boolean;
+  canViewPlanning: boolean;
+  canEditPlanning: boolean;
   canModifyCompletedTask: boolean;
   onClose: () => void;
   onUpdateTaskPlan: (input: { startAt?: string; dueAt?: string; estimateMinutes?: number }) => Promise<void>;
@@ -23,11 +25,13 @@ type TaskDetailPanelProps = {
     title: string;
     description?: string;
     priority: TaskPriority;
+    startAt?: string;
     dueAt?: string;
     estimateMinutes?: number;
     assigneeIds: string[];
   }) => Promise<void>;
   onSubtaskStatusChange: (taskId: string, statusId: string) => Promise<void>;
+  onCreateSubtaskTimeLog: (taskId: string, minutes: number, note?: string) => Promise<void>;
   onCreateComment: (body: string, isInternal: boolean) => Promise<void>;
   onCreateTimeLog: (minutes: number, note?: string) => Promise<void>;
 };
@@ -70,6 +74,15 @@ function getRemainingWorkLabel(estimateMinutes: number | undefined, loggedMinute
 function getTaskDoneState(task: Task, statuses: BoardStatus[]) {
   const currentStatus = statuses.find((status) => status.id === task.statusId);
   return Boolean(task.completedAt || currentStatus?.countsAsDone);
+}
+
+function getTaskLoggedMinutes(task: Task) {
+  return (task.timeLogs ?? []).reduce((sum, log) => sum + log.minutes, 0);
+}
+
+function getAssigneeNames(task: Task) {
+  const names = (task.assignees ?? []).map((assignee) => assignee.user.name);
+  return names.length > 0 ? names.join(", ") : "Sin asignados";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -180,11 +193,14 @@ export function TaskDetailPanel({
   currentUserId,
   canCreateSubtasks,
   canMoveClosedTasks,
+  canViewPlanning,
+  canEditPlanning,
   canModifyCompletedTask,
   onClose,
   onUpdateTaskPlan,
   onCreateSubtask,
   onSubtaskStatusChange,
+  onCreateSubtaskTimeLog,
   onCreateComment,
   onCreateTimeLog
 }: TaskDetailPanelProps) {
@@ -193,16 +209,29 @@ export function TaskDetailPanel({
   const [timeError, setTimeError] = useState("");
   const [planError, setPlanError] = useState("");
   const [subtaskError, setSubtaskError] = useState("");
+  const [subtaskTimeError, setSubtaskTimeError] = useState("");
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [isCreatingSubtask, setIsCreatingSubtask] = useState(false);
   const currentStatus = statuses.find((status) => status.id === task?.statusId);
   const totalMinutes = timeLogs.reduce((sum, log) => sum + log.minutes, 0);
+  const subtaskMinutes = subtasks.reduce((sum, subtask) => sum + getTaskLoggedMinutes(subtask), 0);
+  const completeWorkMinutes = totalMinutes + subtaskMinutes;
   const isCurrentTaskDone = Boolean(task?.completedAt || currentStatus?.countsAsDone);
   const isLockedForCurrentUser = isCurrentTaskDone && !canModifyCompletedTask;
+  const isPlanningLocked = isLockedForCurrentUser || !canEditPlanning;
   const dueSummary = getDueSummary(task?.dueAt, isCurrentTaskDone);
   const rangeLabel = getRangeLabel(task?.startAt, task?.dueAt);
   const completedSubtasks = subtasks.filter((subtask) => getTaskDoneState(subtask, statuses)).length;
   const subtaskProgress = subtasks.length > 0 ? Math.round((completedSubtasks / subtasks.length) * 100) : 0;
+  const participantNames = task ? getAssigneeNames(task) : "Sin asignados";
+  const timeByUser = Array.from(
+    timeLogs.reduce((rows, log) => {
+      const userName = log.user?.name ?? "Usuario sin nombre";
+      const currentMinutes = rows.get(userName) ?? 0;
+      rows.set(userName, currentMinutes + log.minutes);
+      return rows;
+    }, new Map<string, number>())
+  ).map(([name, minutes]) => ({ name, minutes }));
 
   useEffect(() => {
     setActiveTab("summary");
@@ -210,7 +239,14 @@ export function TaskDetailPanel({
     setTimeError("");
     setPlanError("");
     setSubtaskError("");
+    setSubtaskTimeError("");
   }, [task?.id]);
+
+  useEffect(() => {
+    if (!canViewPlanning && activeTab === "plan") {
+      setActiveTab("summary");
+    }
+  }, [activeTab, canViewPlanning]);
 
   async function handlePlanSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -261,13 +297,19 @@ export function TaskDetailPanel({
       const form = event.currentTarget;
       const title = readFormString(form, "title");
       const description = readFormString(form, "description");
+      const startAt = readFormString(form, "startAt");
       const dueAt = readFormString(form, "dueAt");
       const estimateText = readFormString(form, "estimateMinutes");
+
+      if (startAt && dueAt && dueAt < startAt) {
+        throw new Error("La fecha fin no puede ser anterior a la fecha inicio.");
+      }
 
       await onCreateSubtask({
         title,
         description: description || undefined,
         priority: readFormString(form, "priority") as TaskPriority,
+        startAt: toIsoDate(startAt),
         dueAt: toIsoDate(dueAt),
         estimateMinutes: estimateText ? Number(estimateText) : undefined,
         assigneeIds: readFormStrings(form, "assigneeIds")
@@ -278,6 +320,21 @@ export function TaskDetailPanel({
       setSubtaskError(error instanceof Error ? error.message : "No se pudo crear la subtarea.");
     } finally {
       setIsCreatingSubtask(false);
+    }
+  }
+
+  async function handleSubtaskTimeSubmit(event: FormEvent<HTMLFormElement>, subtaskId: string) {
+    event.preventDefault();
+    setSubtaskTimeError("");
+
+    try {
+      const form = event.currentTarget;
+      const minutes = Number(readFormString(form, "minutes"));
+      const note = readFormString(form, "note");
+      await onCreateSubtaskTimeLog(subtaskId, minutes, note || undefined);
+      form.reset();
+    } catch (error) {
+      setSubtaskTimeError(error instanceof Error ? error.message : "No se pudo registrar tiempo en la subtarea.");
     }
   }
 
@@ -315,7 +372,9 @@ export function TaskDetailPanel({
 
         <nav className="detail-tabs" aria-label="Secciones de actividad">
           <button className={activeTab === "summary" ? "active" : ""} type="button" onClick={() => setActiveTab("summary")}>Resumen</button>
-          <button className={activeTab === "plan" ? "active" : ""} type="button" onClick={() => setActiveTab("plan")}>Planeacion</button>
+          {canViewPlanning ? (
+            <button className={activeTab === "plan" ? "active" : ""} type="button" onClick={() => setActiveTab("plan")}>Planeacion</button>
+          ) : undefined}
           <button className={activeTab === "subtasks" ? "active" : ""} data-guide="task-subtasks-tab" type="button" onClick={() => setActiveTab("subtasks")}>Subtareas</button>
           <button className={activeTab === "events" ? "active" : ""} type="button" onClick={() => setActiveTab("events")}>Eventos</button>
           <button className={activeTab === "comments" ? "active" : ""} type="button" onClick={() => setActiveTab("comments")}>Comentarios</button>
@@ -326,7 +385,7 @@ export function TaskDetailPanel({
           {isLockedForCurrentUser ? (
             <div className="locked-note">
               <ShieldAlert size={17} />
-              <span>Actividad terminada. Puedes revisarla, pero solo Admin/Admin TI puede editar planeacion, comentarios o tiempo.</span>
+              <span>Actividad terminada. Puedes revisarla, pero solo Admin/Admin TI puede reabrir o editar datos bloqueados.</span>
             </div>
           ) : undefined}
 
@@ -365,8 +424,20 @@ export function TaskDetailPanel({
                 Trabajo pendiente
                 <strong>{getRemainingWorkLabel(task.estimateMinutes, totalMinutes)}</strong>
               </span>
+              <span>
+                Tiempo total
+                <strong>{formatMinutes(completeWorkMinutes)}</strong>
+              </span>
+              <span>
+                Participantes
+                <strong>{(task.assignees ?? []).length}</strong>
+              </span>
             </div>
             <p className="description-text">{task.description || "Sin descripcion."}</p>
+            <div className="participant-panel">
+              <span>Participantes asignados</span>
+              <strong>{participantNames}</strong>
+            </div>
             <div className="subtask-summary-card" data-guide="task-subtasks-summary">
               <div>
                 <GitBranch size={18} />
@@ -382,7 +453,7 @@ export function TaskDetailPanel({
             </div>
             <div className="avatar-line">
               {(task.assignees ?? []).map((assignee) => (
-                <span key={assignee.id} title={assignee.user.name}>{initials(assignee.user.name)}</span>
+                <span key={assignee.id} title={`${assignee.user.name} · ${assignee.user.email}`}>{initials(assignee.user.name)}</span>
               ))}
             </div>
           </section>
@@ -404,13 +475,29 @@ export function TaskDetailPanel({
                   const done = getTaskDoneState(subtask, statuses);
                   const assignedToUser = Boolean((subtask.assignees ?? []).some((assignee) => assignee.userId === currentUserId));
                   const canMoveSubtask = (assignedToUser || canMoveClosedTasks) && (!done || canMoveClosedTasks);
+                  const loggedMinutes = getTaskLoggedMinutes(subtask);
 
                   return (
                     <article className={done ? "subtask-item done" : "subtask-item"} key={subtask.id}>
                       <span>{done ? <CheckCircle2 size={16} /> : <GitBranch size={16} />}</span>
                       <div>
                         <strong>{subtask.title}</strong>
-                        <small>{subtask.description || "Sin descripcion"} · Fin {formatDate(subtask.dueAt)} · {subtask.estimateMinutes ? formatMinutes(subtask.estimateMinutes) : "Sin estimar"}</small>
+                        <small>{subtask.description || "Sin descripcion"}</small>
+                        <div className="subtask-metrics">
+                          <span>Inicio <strong>{formatDate(subtask.startAt)}</strong></span>
+                          <span>Fin plan <strong>{formatDate(subtask.dueAt)}</strong></span>
+                          <span>Fin real <strong>{formatDate(subtask.completedAt)}</strong></span>
+                          <span>Estimado <strong>{subtask.estimateMinutes ? formatMinutes(subtask.estimateMinutes) : "Sin estimar"}</strong></span>
+                          <span>Invertido <strong>{formatMinutes(loggedMinutes)}</strong></span>
+                          <span>Asignados <strong>{getAssigneeNames(subtask)}</strong></span>
+                        </div>
+                        {!done && !isLockedForCurrentUser ? (
+                          <form className="subtask-time-form" onSubmit={(event) => void handleSubtaskTimeSubmit(event, subtask.id)}>
+                            <input name="minutes" type="number" min={1} max={1440} required placeholder="Min" />
+                            <input name="note" placeholder="Nota de avance" />
+                            <Button variant="ghost" type="submit">Registrar tiempo</Button>
+                          </form>
+                        ) : undefined}
                       </div>
                       <select
                         value={subtask.statusId}
@@ -425,6 +512,7 @@ export function TaskDetailPanel({
                     </article>
                   );
                 })}
+                {subtaskTimeError ? <p className="form-error">{subtaskTimeError}</p> : undefined}
                 {!isLoading && subtasks.length === 0 ? (
                   <EmptyState title="Sin subtareas" description="Divide una actividad grande en pasos concretos para que el avance sea mas claro." />
                 ) : undefined}
@@ -446,6 +534,10 @@ export function TaskDetailPanel({
                       <option value="HIGH">Alta</option>
                       <option value="URGENT">Urgente</option>
                     </select>
+                  </label>
+                  <label>
+                    Inicio
+                    <input name="startAt" type="date" />
                   </label>
                   <label>
                     Fin
@@ -476,7 +568,7 @@ export function TaskDetailPanel({
             </section>
           ) : undefined}
 
-          {activeTab === "plan" ? (
+          {canViewPlanning && activeTab === "plan" ? (
             <section className="detail-section">
               <div className={`planning-callout due-${dueSummary.tone}`}>
                 <CalendarClock size={20} />
@@ -489,19 +581,19 @@ export function TaskDetailPanel({
               <form className="plan-form" key={task.id} onSubmit={handlePlanSubmit}>
               <label>
                 Inicio
-                <input name="startAt" type="date" defaultValue={toDateInput(task.startAt)} disabled={isLockedForCurrentUser} />
+                <input name="startAt" type="date" defaultValue={toDateInput(task.startAt)} disabled={isPlanningLocked} />
               </label>
               <label>
                 Fin
-                <input name="dueAt" type="date" defaultValue={toDateInput(task.dueAt)} disabled={isLockedForCurrentUser} />
+                <input name="dueAt" type="date" defaultValue={toDateInput(task.dueAt)} disabled={isPlanningLocked} />
               </label>
               <label>
                 Estimado
-                <input name="estimateMinutes" type="number" min={1} placeholder="Minutos" defaultValue={task.estimateMinutes ?? ""} disabled={isLockedForCurrentUser} />
+                <input name="estimateMinutes" type="number" min={1} placeholder="Minutos" defaultValue={task.estimateMinutes ?? ""} disabled={isPlanningLocked} />
               </label>
               {planError ? <p className="form-error">{planError}</p> : undefined}
-              {isLockedForCurrentUser ? (
-                <p className="locked-inline">La planeacion queda congelada al terminar la actividad.</p>
+              {isPlanningLocked ? (
+                <p className="locked-inline">La planeacion solo la modifica gerencia/admin; si esta terminada queda congelada salvo reapertura autorizada.</p>
               ) : (
                 <Button variant="secondary" type="submit" disabled={isSavingPlan}>
                   {isSavingPlan ? "Guardando..." : "Guardar planeacion"}
@@ -578,11 +670,40 @@ export function TaskDetailPanel({
               <strong>{formatMinutes(totalMinutes)} registrados</strong>
               <span>{getRemainingWorkLabel(task.estimateMinutes, totalMinutes)}</span>
             </div>
+            <div className="time-summary-grid">
+              <span>
+                Actividad principal
+                <strong>{formatMinutes(totalMinutes)}</strong>
+              </span>
+              <span>
+                Subtareas
+                <strong>{formatMinutes(subtaskMinutes)}</strong>
+              </span>
+              <span>
+                Total real
+                <strong>{formatMinutes(completeWorkMinutes)}</strong>
+              </span>
+              <span>
+                Estimado
+                <strong>{task.estimateMinutes ? formatMinutes(task.estimateMinutes) : "Falta estimar"}</strong>
+              </span>
+            </div>
+            <div className="time-by-user">
+              <strong>Tiempo por participante</strong>
+              {timeByUser.map((row) => (
+                <span key={row.name}>
+                  {row.name}
+                  <b>{formatMinutes(row.minutes)}</b>
+                </span>
+              ))}
+              {timeByUser.length === 0 ? <small>Aun no hay tiempo por persona.</small> : undefined}
+            </div>
             <div className="time-list">
               {timeLogs.map((log) => (
                 <article key={log.id}>
                   <strong>{formatMinutes(log.minutes)}</strong>
                   <span>{log.note || "Sin nota"}</span>
+                  <em>{log.user?.name ?? "Usuario sin nombre"}</em>
                   <small>{formatDate(log.logDate)}</small>
                 </article>
               ))}

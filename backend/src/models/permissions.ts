@@ -92,7 +92,8 @@ export const ROLE_DEFINITIONS: Array<{
       "task.comment",
       "task.log_time",
       "task.view_all",
-      "report.view_project"
+      "report.view_project",
+      "report.view_workspace"
     ]
   },
   {

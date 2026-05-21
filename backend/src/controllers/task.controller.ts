@@ -180,6 +180,24 @@ export async function listTasks(req: Request, res: Response) {
           }
         }
       },
+      timeLogs: {
+        where: {
+          deletedAt: clearNullableTimestamp
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatarUrl: true
+            }
+          }
+        },
+        orderBy: {
+          logDate: "desc"
+        }
+      },
       _count: {
         select: {
           comments: true,
@@ -746,6 +764,16 @@ export async function createTimeLog(req: Request, res: Response) {
       logDate: parseOptionalDate(req.body.logDate) ?? new Date(),
       startedAt: parseOptionalDate(req.body.startedAt),
       endedAt: parseOptionalDate(req.body.endedAt)
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatarUrl: true
+        }
+      }
     }
   });
 

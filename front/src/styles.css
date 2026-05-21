@@ -685,8 +685,16 @@ select:focus-visible {
 .task-card small,
 .task-footer,
 .comment-card small,
-.time-list small {
+.time-list small,
+.time-list em {
   color: var(--muted);
+}
+
+.time-list em {
+  color: var(--blue);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 850;
 }
 
 .project-card strong,
@@ -1057,7 +1065,7 @@ select:focus-visible {
 
 .detail-tabs {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
   gap: 6px;
   border-radius: 8px;
   background: var(--surface-muted);
@@ -1564,6 +1572,27 @@ select:focus-visible {
   line-height: 1.5;
 }
 
+.participant-panel {
+  display: grid;
+  gap: 5px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.participant-panel span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.participant-panel strong {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.35;
+}
+
 .subtask-summary-card,
 .subtask-progress {
   display: grid;
@@ -1618,7 +1647,7 @@ select:focus-visible {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr) 170px;
   gap: 10px;
-  align-items: center;
+  align-items: start;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
@@ -1649,13 +1678,52 @@ select:focus-visible {
 
 .subtask-item div {
   display: grid;
-  gap: 3px;
+  gap: 8px;
 }
 
 .subtask-item small {
   color: var(--muted);
   font-weight: 750;
   line-height: 1.35;
+}
+
+.subtask-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.subtask-metrics span {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.subtask-metrics strong {
+  color: var(--text);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.subtask-time-form {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.subtask-time-form input {
+  min-height: 36px;
+}
+
+.subtask-time-form button {
+  min-height: 36px;
 }
 
 .subtask-form {
@@ -1797,6 +1865,62 @@ select:focus-visible {
 .time-total span {
   grid-column: 2;
   font-size: 12px;
+}
+
+.time-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.time-summary-grid span {
+  display: grid;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  padding: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.time-summary-grid strong {
+  color: var(--text);
+  font-size: 15px;
+}
+
+.time-by-user {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  border-radius: 10px;
+  background: #f8fbff;
+  padding: 12px;
+}
+
+.time-by-user > strong {
+  font-size: 14px;
+}
+
+.time-by-user span {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.time-by-user b {
+  color: var(--text);
+}
+
+.time-by-user small {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 .time-form {

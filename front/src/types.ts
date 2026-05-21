@@ -215,6 +215,7 @@ export type Task = {
   updatedAt: string;
   status?: BoardStatus;
   assignees?: TaskAssignee[];
+  timeLogs?: TimeLog[];
   _count?: TaskCounts;
 };
 
@@ -341,12 +342,16 @@ export type WorkspaceReportProject = {
   completed_tasks: number;
   blocked_tasks: number;
   overdue_tasks: number;
+  estimate_minutes?: number;
+  actual_minutes?: number;
   progress_percent?: number;
 };
 
 export type WorkspaceReportUser = {
   user_id: string;
   name: string;
+  assigned_tasks: number;
+  active_tasks: number;
   completed_tasks: number;
   total_minutes: number;
 };
