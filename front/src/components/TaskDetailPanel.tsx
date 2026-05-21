@@ -1,0 +1,607 @@
+import { FormEvent, useEffect, useState } from "react";
+import { CalendarClock, CheckCircle2, Clock3, GitBranch, MessageSquareText, PanelRightClose, Plus, ShieldAlert, TimerReset } from "lucide-react";
+import { Button, EmptyState, LoadingState } from "./ui";
+import type { ActivityEvent, BoardStatus, ProjectMember, Task, TaskComment, TaskPriority, TimeLog } from "../types";
+import { formatDate, formatMinutes, getDueSummary, getRangeLabel, initials } from "../lib/format";
+
+type TaskDetailPanelProps = {
+  task?: Task;
+  subtasks: Task[];
+  statuses: BoardStatus[];
+  projectMembers: ProjectMember[];
+  comments: TaskComment[];
+  timeLogs: TimeLog[];
+  events: ActivityEvent[];
+  isLoading: boolean;
+  currentUserId: string;
+  canCreateSubtasks: boolean;
+  canMoveClosedTasks: boolean;
+  canModifyCompletedTask: boolean;
+  onClose: () => void;
+  onUpdateTaskPlan: (input: { startAt?: string; dueAt?: string; estimateMinutes?: number }) => Promise<void>;
+  onCreateSubtask: (input: {
+    title: string;
+    description?: string;
+    priority: TaskPriority;
+    dueAt?: string;
+    estimateMinutes?: number;
+    assigneeIds: string[];
+  }) => Promise<void>;
+  onSubtaskStatusChange: (taskId: string, statusId: string) => Promise<void>;
+  onCreateComment: (body: string, isInternal: boolean) => Promise<void>;
+  onCreateTimeLog: (minutes: number, note?: string) => Promise<void>;
+};
+
+type DetailTab = "summary" | "plan" | "subtasks" | "events" | "comments" | "time";
+
+function readFormString(form: HTMLFormElement, fieldName: string) {
+  const value = new FormData(form).get(fieldName);
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function readFormStrings(form: HTMLFormElement, fieldName: string) {
+  return new FormData(form)
+    .getAll(fieldName)
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+}
+
+function toDateInput(value?: string) {
+  return value ? new Date(value).toISOString().slice(0, 10) : "";
+}
+
+function toIsoDate(dateValue: string) {
+  return dateValue ? new Date(`${dateValue}T00:00:00.000Z`).toISOString() : undefined;
+}
+
+function getRemainingWorkLabel(estimateMinutes: number | undefined, loggedMinutes: number) {
+  if (!estimateMinutes) {
+    return "Falta estimar";
+  }
+
+  const remainingMinutes = estimateMinutes - loggedMinutes;
+
+  if (remainingMinutes <= 0) {
+    return "Estimado cubierto";
+  }
+
+  return `${formatMinutes(remainingMinutes)} restantes`;
+}
+
+function getTaskDoneState(task: Task, statuses: BoardStatus[]) {
+  const currentStatus = statuses.find((status) => status.id === task.statusId);
+  return Boolean(task.completedAt || currentStatus?.countsAsDone);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatEventDate(value: string) {
+  return new Intl.DateTimeFormat("es-MX", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(value));
+}
+
+function getStatusName(statuses: BoardStatus[], statusId: unknown) {
+  return typeof statusId === "string"
+    ? statuses.find((status) => status.id === statusId)?.name ?? "Estado desconocido"
+    : "Estado desconocido";
+}
+
+function getChangedFieldLabel(fieldName: string) {
+  const labels: Record<string, string> = {
+    title: "titulo",
+    description: "descripcion",
+    priority: "prioridad",
+    startAt: "fecha inicio",
+    dueAt: "fecha fin",
+    estimateMinutes: "estimado",
+    progress: "avance"
+  };
+
+  return labels[fieldName] ?? fieldName;
+}
+
+function getEventText(event: ActivityEvent, statuses: BoardStatus[]) {
+  const after = isRecord(event.after) ? event.after : {};
+  const before = isRecord(event.before) ? event.before : {};
+
+  switch (event.action) {
+    case "task.created":
+      return {
+        title: "Actividad creada",
+        description: "Se registro la actividad en el tablero."
+      };
+    case "task.updated": {
+      const changedFields = Object.keys(after)
+        .filter((fieldName) => after[fieldName] !== undefined)
+        .map(getChangedFieldLabel);
+      return {
+        title: "Actividad modificada",
+        description: changedFields.length > 0 ? `Cambios en ${changedFields.join(", ")}.` : "Se actualizaron datos de la actividad."
+      };
+    }
+    case "task.status_changed":
+      return {
+        title: "Estado actualizado",
+        description: `${getStatusName(statuses, before.statusId)} -> ${getStatusName(statuses, after.statusId)}.`
+      };
+    case "task.completed":
+      return {
+        title: "Actividad terminada",
+        description: `Se movio a ${getStatusName(statuses, after.statusId)}.`
+      };
+    case "task.reopened":
+      return {
+        title: "Actividad reabierta",
+        description: `Regreso a ${getStatusName(statuses, after.statusId)}.`
+      };
+    case "task.assigned":
+      return {
+        title: "Asignado agregado",
+        description: "Se agrego una persona responsable."
+      };
+    case "task.unassigned":
+      return {
+        title: "Asignado removido",
+        description: "Se quito una persona responsable."
+      };
+    case "comment.created":
+      return {
+        title: "Comentario agregado",
+        description: after.isInternal === true ? "Se agrego un comentario interno." : "Se agrego un comentario visible."
+      };
+    case "time.logged":
+      return {
+        title: "Tiempo registrado",
+        description: typeof after.minutes === "number" ? `Se registraron ${formatMinutes(after.minutes)}.` : "Se registro tiempo trabajado."
+      };
+    default:
+      return {
+        title: event.action,
+        description: "Evento registrado en la actividad."
+      };
+  }
+}
+
+export function TaskDetailPanel({
+  task,
+  subtasks,
+  statuses,
+  projectMembers,
+  comments,
+  timeLogs,
+  events,
+  isLoading,
+  currentUserId,
+  canCreateSubtasks,
+  canMoveClosedTasks,
+  canModifyCompletedTask,
+  onClose,
+  onUpdateTaskPlan,
+  onCreateSubtask,
+  onSubtaskStatusChange,
+  onCreateComment,
+  onCreateTimeLog
+}: TaskDetailPanelProps) {
+  const [activeTab, setActiveTab] = useState<DetailTab>("summary");
+  const [commentError, setCommentError] = useState("");
+  const [timeError, setTimeError] = useState("");
+  const [planError, setPlanError] = useState("");
+  const [subtaskError, setSubtaskError] = useState("");
+  const [isSavingPlan, setIsSavingPlan] = useState(false);
+  const [isCreatingSubtask, setIsCreatingSubtask] = useState(false);
+  const currentStatus = statuses.find((status) => status.id === task?.statusId);
+  const totalMinutes = timeLogs.reduce((sum, log) => sum + log.minutes, 0);
+  const isCurrentTaskDone = Boolean(task?.completedAt || currentStatus?.countsAsDone);
+  const isLockedForCurrentUser = isCurrentTaskDone && !canModifyCompletedTask;
+  const dueSummary = getDueSummary(task?.dueAt, isCurrentTaskDone);
+  const rangeLabel = getRangeLabel(task?.startAt, task?.dueAt);
+  const completedSubtasks = subtasks.filter((subtask) => getTaskDoneState(subtask, statuses)).length;
+  const subtaskProgress = subtasks.length > 0 ? Math.round((completedSubtasks / subtasks.length) * 100) : 0;
+
+  useEffect(() => {
+    setActiveTab("summary");
+    setCommentError("");
+    setTimeError("");
+    setPlanError("");
+    setSubtaskError("");
+  }, [task?.id]);
+
+  async function handlePlanSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPlanError("");
+    setIsSavingPlan(true);
+
+    try {
+      const form = event.currentTarget;
+      const startAt = readFormString(form, "startAt");
+      const dueAt = readFormString(form, "dueAt");
+      const estimateText = readFormString(form, "estimateMinutes");
+
+      if (startAt && dueAt && dueAt < startAt) {
+        throw new Error("La fecha fin no puede ser anterior a la fecha inicio.");
+      }
+
+      await onUpdateTaskPlan({
+        startAt: toIsoDate(startAt),
+        dueAt: toIsoDate(dueAt),
+        estimateMinutes: estimateText ? Number(estimateText) : undefined
+      });
+    } catch (error) {
+      setPlanError(error instanceof Error ? error.message : "No se pudo guardar la planeacion.");
+    } finally {
+      setIsSavingPlan(false);
+    }
+  }
+
+  async function handleCommentSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCommentError("");
+
+    try {
+      const form = event.currentTarget;
+      await onCreateComment(readFormString(form, "body"), readFormString(form, "isInternal") === "yes");
+      form.reset();
+    } catch (error) {
+      setCommentError(error instanceof Error ? error.message : "No se pudo guardar el comentario.");
+    }
+  }
+
+  async function handleSubtaskSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubtaskError("");
+    setIsCreatingSubtask(true);
+
+    try {
+      const form = event.currentTarget;
+      const title = readFormString(form, "title");
+      const description = readFormString(form, "description");
+      const dueAt = readFormString(form, "dueAt");
+      const estimateText = readFormString(form, "estimateMinutes");
+
+      await onCreateSubtask({
+        title,
+        description: description || undefined,
+        priority: readFormString(form, "priority") as TaskPriority,
+        dueAt: toIsoDate(dueAt),
+        estimateMinutes: estimateText ? Number(estimateText) : undefined,
+        assigneeIds: readFormStrings(form, "assigneeIds")
+      });
+
+      form.reset();
+    } catch (error) {
+      setSubtaskError(error instanceof Error ? error.message : "No se pudo crear la subtarea.");
+    } finally {
+      setIsCreatingSubtask(false);
+    }
+  }
+
+  async function handleTimeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setTimeError("");
+
+    try {
+      const form = event.currentTarget;
+      const minutes = Number(readFormString(form, "minutes"));
+      const note = readFormString(form, "note");
+      await onCreateTimeLog(minutes, note || undefined);
+      form.reset();
+    } catch (error) {
+      setTimeError(error instanceof Error ? error.message : "No se pudo registrar el tiempo.");
+    }
+  }
+
+  if (!task) {
+    return <></>;
+  }
+
+  return (
+    <div className="modal-backdrop detail-backdrop" role="dialog" aria-modal="true" aria-labelledby="task-detail-title">
+      <aside className="detail-modal">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow">Detalle</p>
+            <h2 id="task-detail-title">{task.title}</h2>
+          </div>
+          <button className="icon-button" type="button" onClick={onClose} title="Cerrar detalle">
+            <PanelRightClose size={18} />
+          </button>
+        </header>
+
+        <nav className="detail-tabs" aria-label="Secciones de actividad">
+          <button className={activeTab === "summary" ? "active" : ""} type="button" onClick={() => setActiveTab("summary")}>Resumen</button>
+          <button className={activeTab === "plan" ? "active" : ""} type="button" onClick={() => setActiveTab("plan")}>Planeacion</button>
+          <button className={activeTab === "subtasks" ? "active" : ""} data-guide="task-subtasks-tab" type="button" onClick={() => setActiveTab("subtasks")}>Subtareas</button>
+          <button className={activeTab === "events" ? "active" : ""} type="button" onClick={() => setActiveTab("events")}>Eventos</button>
+          <button className={activeTab === "comments" ? "active" : ""} type="button" onClick={() => setActiveTab("comments")}>Comentarios</button>
+          <button className={activeTab === "time" ? "active" : ""} type="button" onClick={() => setActiveTab("time")}>Tiempo</button>
+        </nav>
+
+        <div className="detail-body">
+          {isLockedForCurrentUser ? (
+            <div className="locked-note">
+              <ShieldAlert size={17} />
+              <span>Actividad terminada. Puedes revisarla, pero solo Admin/Admin TI puede editar planeacion, comentarios o tiempo.</span>
+            </div>
+          ) : undefined}
+
+          {activeTab === "summary" ? (
+            <section className="detail-section">
+            <div className={`planning-callout due-${dueSummary.tone}`}>
+              <CalendarClock size={20} />
+              <div>
+                <span>Vencimiento</span>
+                <strong>{dueSummary.label}</strong>
+                <small>{rangeLabel}</small>
+              </div>
+            </div>
+            <div className="detail-grid">
+              <span>
+                Estado
+                <strong>{currentStatus?.name ?? "Sin estado"}</strong>
+              </span>
+              <span>
+                Prioridad
+                <strong>{task.priority}</strong>
+              </span>
+              <span>
+                Fecha inicio
+                <strong>{formatDate(task.startAt)}</strong>
+              </span>
+              <span>
+                Fecha fin
+                <strong>{formatDate(task.dueAt)}</strong>
+              </span>
+              <span>
+                Estimado
+                <strong>{task.estimateMinutes ? formatMinutes(task.estimateMinutes) : "Falta estimar"}</strong>
+              </span>
+              <span>
+                Trabajo pendiente
+                <strong>{getRemainingWorkLabel(task.estimateMinutes, totalMinutes)}</strong>
+              </span>
+            </div>
+            <p className="description-text">{task.description || "Sin descripcion."}</p>
+            <div className="subtask-summary-card" data-guide="task-subtasks-summary">
+              <div>
+                <GitBranch size={18} />
+                <span>
+                  <strong>{completedSubtasks}/{subtasks.length}</strong>
+                  subtareas terminadas
+                </span>
+              </div>
+              <div className="progress-track">
+                <span style={{ width: `${subtaskProgress}%` }} />
+              </div>
+              <small>{subtasks.length > 0 ? `${subtaskProgress}% de avance en subtareas` : "Agrega subtareas para dividir el trabajo."}</small>
+            </div>
+            <div className="avatar-line">
+              {(task.assignees ?? []).map((assignee) => (
+                <span key={assignee.id} title={assignee.user.name}>{initials(assignee.user.name)}</span>
+              ))}
+            </div>
+          </section>
+          ) : undefined}
+
+          {activeTab === "subtasks" ? (
+            <section className="detail-section" data-guide="task-subtasks">
+              <h3><GitBranch size={17} /> Subtareas</h3>
+              <div className="subtask-progress">
+                <span>{completedSubtasks}/{subtasks.length} terminadas</span>
+                <div className="progress-track">
+                  <span style={{ width: `${subtaskProgress}%` }} />
+                </div>
+                <strong>{subtaskProgress}%</strong>
+              </div>
+
+              <div className="subtask-list">
+                {subtasks.map((subtask) => {
+                  const done = getTaskDoneState(subtask, statuses);
+                  const assignedToUser = Boolean((subtask.assignees ?? []).some((assignee) => assignee.userId === currentUserId));
+                  const canMoveSubtask = (assignedToUser || canMoveClosedTasks) && (!done || canMoveClosedTasks);
+
+                  return (
+                    <article className={done ? "subtask-item done" : "subtask-item"} key={subtask.id}>
+                      <span>{done ? <CheckCircle2 size={16} /> : <GitBranch size={16} />}</span>
+                      <div>
+                        <strong>{subtask.title}</strong>
+                        <small>{subtask.description || "Sin descripcion"} · Fin {formatDate(subtask.dueAt)} · {subtask.estimateMinutes ? formatMinutes(subtask.estimateMinutes) : "Sin estimar"}</small>
+                      </div>
+                      <select
+                        value={subtask.statusId}
+                        disabled={!canMoveSubtask}
+                        title={canMoveSubtask ? "Cambiar estado de subtarea" : "Solo asignados pueden moverla; cerradas solo admin o gerente."}
+                        onChange={(event) => void onSubtaskStatusChange(subtask.id, event.target.value)}
+                      >
+                        {statuses.map((status) => (
+                          <option key={status.id} value={status.id}>{status.name}</option>
+                        ))}
+                      </select>
+                    </article>
+                  );
+                })}
+                {!isLoading && subtasks.length === 0 ? (
+                  <EmptyState title="Sin subtareas" description="Divide una actividad grande en pasos concretos para que el avance sea mas claro." />
+                ) : undefined}
+              </div>
+
+              {isLockedForCurrentUser || !canCreateSubtasks ? (
+                <p className="locked-inline">Solo gerencia/admin puede crear subtareas y las actividades terminadas quedan bloqueadas.</p>
+              ) : (
+                <form className="subtask-form" onSubmit={handleSubtaskSubmit}>
+                  <label className="subtask-title-field">
+                    Subtarea
+                    <input name="title" minLength={2} required placeholder="Paso concreto dentro de esta actividad" />
+                  </label>
+                  <label>
+                    Prioridad
+                    <select name="priority" defaultValue={task.priority}>
+                      <option value="LOW">Baja</option>
+                      <option value="MEDIUM">Media</option>
+                      <option value="HIGH">Alta</option>
+                      <option value="URGENT">Urgente</option>
+                    </select>
+                  </label>
+                  <label>
+                    Fin
+                    <input name="dueAt" type="date" />
+                  </label>
+                  <label>
+                    Estimado
+                    <input name="estimateMinutes" type="number" min={1} placeholder="Minutos" />
+                  </label>
+                  <label className="subtask-assignee-field">
+                    Asignados
+                    <select name="assigneeIds" multiple>
+                      {projectMembers.map((member) => (
+                        <option key={member.userId} value={member.userId}>{member.user.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="subtask-description-field">
+                    Descripcion
+                    <textarea name="description" rows={3} placeholder="Criterio para marcar esta subtarea como lista" />
+                  </label>
+                  {subtaskError ? <p className="form-error">{subtaskError}</p> : undefined}
+                  <Button icon={<Plus size={17} />} variant="secondary" type="submit" disabled={isCreatingSubtask}>
+                    {isCreatingSubtask ? "Creando..." : "Crear subtarea"}
+                  </Button>
+                </form>
+              )}
+            </section>
+          ) : undefined}
+
+          {activeTab === "plan" ? (
+            <section className="detail-section">
+              <div className={`planning-callout due-${dueSummary.tone}`}>
+                <CalendarClock size={20} />
+                <div>
+                  <span>Planeacion</span>
+                  <strong>{dueSummary.label}</strong>
+                  <small>{rangeLabel}</small>
+                </div>
+              </div>
+              <form className="plan-form" key={task.id} onSubmit={handlePlanSubmit}>
+              <label>
+                Inicio
+                <input name="startAt" type="date" defaultValue={toDateInput(task.startAt)} disabled={isLockedForCurrentUser} />
+              </label>
+              <label>
+                Fin
+                <input name="dueAt" type="date" defaultValue={toDateInput(task.dueAt)} disabled={isLockedForCurrentUser} />
+              </label>
+              <label>
+                Estimado
+                <input name="estimateMinutes" type="number" min={1} placeholder="Minutos" defaultValue={task.estimateMinutes ?? ""} disabled={isLockedForCurrentUser} />
+              </label>
+              {planError ? <p className="form-error">{planError}</p> : undefined}
+              {isLockedForCurrentUser ? (
+                <p className="locked-inline">La planeacion queda congelada al terminar la actividad.</p>
+              ) : (
+                <Button variant="secondary" type="submit" disabled={isSavingPlan}>
+                  {isSavingPlan ? "Guardando..." : "Guardar planeacion"}
+                </Button>
+              )}
+            </form>
+          </section>
+          ) : undefined}
+
+          {activeTab === "events" ? (
+            <section className="detail-section">
+              <h3><TimerReset size={17} /> Eventos y cambios</h3>
+              {isLoading ? <LoadingState label="Cargando eventos..." rows={3} /> : undefined}
+              <div className="event-timeline">
+                {events.map((event) => {
+                  const eventText = getEventText(event, statuses);
+
+                  return (
+                    <article key={event.id} className="event-card">
+                      <span />
+                      <div>
+                        <header>
+                          <strong>{eventText.title}</strong>
+                          <small>{formatEventDate(event.createdAt)}</small>
+                        </header>
+                        <p>{eventText.description}</p>
+                        <small>{event.actor?.name ?? "Sistema"}</small>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              {!isLoading && events.length === 0 ? <EmptyState title="Sin eventos registrados" description="Los cambios importantes de la actividad apareceran aqui." /> : undefined}
+            </section>
+          ) : undefined}
+
+          {activeTab === "comments" ? (
+            <section className="detail-section">
+            <h3><MessageSquareText size={17} /> Comentarios</h3>
+            {isLoading ? <LoadingState label="Cargando comentarios..." rows={2} /> : undefined}
+            <div className="comment-list">
+              {comments.map((comment) => (
+                <article key={comment.id} className="comment-card">
+                  <div>
+                    <strong>{comment.user.name}</strong>
+                    {comment.isInternal ? <span><ShieldAlert size={13} /> Interno</span> : undefined}
+                  </div>
+                  <p>{comment.body}</p>
+                  <small>{formatDate(comment.createdAt)}</small>
+                </article>
+              ))}
+            </div>
+            {isLockedForCurrentUser ? (
+              <p className="locked-inline">Comentarios cerrados porque la actividad ya fue terminada.</p>
+            ) : (
+              <form className="form-stack" onSubmit={handleCommentSubmit}>
+                <textarea name="body" rows={3} required placeholder="Escribe un comentario" />
+                <label className="inline-check">
+                  <input type="checkbox" name="isInternal" value="yes" />
+                  Comentario interno
+                </label>
+                {commentError ? <p className="form-error">{commentError}</p> : undefined}
+                <Button variant="secondary" type="submit">Comentar</Button>
+              </form>
+            )}
+          </section>
+          ) : undefined}
+
+          {activeTab === "time" ? (
+            <section className="detail-section">
+            <h3><Clock3 size={17} /> Tiempo trabajado</h3>
+            <div className="time-total">
+              <TimerReset size={17} />
+              <strong>{formatMinutes(totalMinutes)} registrados</strong>
+              <span>{getRemainingWorkLabel(task.estimateMinutes, totalMinutes)}</span>
+            </div>
+            <div className="time-list">
+              {timeLogs.map((log) => (
+                <article key={log.id}>
+                  <strong>{formatMinutes(log.minutes)}</strong>
+                  <span>{log.note || "Sin nota"}</span>
+                  <small>{formatDate(log.logDate)}</small>
+                </article>
+              ))}
+              {!isLoading && timeLogs.length === 0 ? <EmptyState title="Sin tiempo registrado" description="Registra minutos trabajados para alimentar reportes y estimado real." /> : undefined}
+            </div>
+            {isLockedForCurrentUser ? (
+              <p className="locked-inline">Tiempo cerrado porque la actividad ya fue terminada.</p>
+            ) : (
+              <form className="time-form" onSubmit={handleTimeSubmit}>
+                <input name="minutes" type="number" min={1} max={1440} required placeholder="Min" />
+                <input name="note" placeholder="Nota opcional" />
+                {timeError ? <p className="form-error">{timeError}</p> : undefined}
+                <Button variant="secondary" type="submit">Registrar</Button>
+              </form>
+            )}
+          </section>
+          ) : undefined}
+        </div>
+      </aside>
+    </div>
+  );
+}

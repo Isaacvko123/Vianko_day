@@ -1,0 +1,642 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  name         String
+  email        String    @unique
+  passwordHash String?
+  avatarUrl    String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  memberships         WorkspaceMember[]
+  projectMembers      ProjectMember[]
+  assignedTasks       TaskAssignee[]
+  approvedMembers     WorkspaceMember[]           @relation("MembershipApprovedBy")
+  staffingRequests    ProjectStaffingRequest[]    @relation("StaffingRequestRequester")
+  staffingResponses   ProjectStaffingRequest[]    @relation("StaffingRequestResponder")
+  requestedStaffing   ProjectStaffingRequest[]    @relation("StaffingRequestedUser")
+  staffingAssignments ProjectStaffingAssignment[]
+  comments            Comment[]
+  timeLogs            TimeLog[]
+  sessions            Session[]
+  createdTasks        Task[]                      @relation("TaskCreatedBy")
+  createdProjects     Project[]                   @relation("ProjectCreatedBy")
+  invitationsSent     Invitation[]                @relation("InvitationSentBy")
+  activityLogs        ActivityLog[]               @relation("ActivityActor")
+}
+
+model Session {
+  id               String    @id @default(uuid())
+  userId           String
+  refreshTokenHash String    @unique
+  userAgent        String?
+  ipHash           String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  rotatedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([revokedAt])
+}
+
+model Workspace {
+  id        String    @id @default(uuid())
+  name      String
+  slug      String    @unique
+  logoUrl   String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  members          WorkspaceMember[]
+  areas            Area[]
+  localities       Locality[]
+  positions        Position[]
+  roles            Role[]
+  projects         Project[]
+  boards           Board[]
+  tasks            Task[]
+  invitations      Invitation[]
+  staffingRequests ProjectStaffingRequest[]
+  permissions      Permission[]
+  activityLogs     ActivityLog[]
+}
+
+model WorkspaceMember {
+  id           String       @id @default(uuid())
+  workspaceId  String
+  userId       String
+  roleId       String?
+  areaId       String?
+  localityId   String?
+  positionId   String?
+  userType     UserType     @default(INTERNAL)
+  status       MemberStatus @default(INVITED)
+  invitedById  String?
+  approvedById String?
+  approvedAt   DateTime?
+  joinedAt     DateTime?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  workspace      Workspace                 @relation(fields: [workspaceId], references: [id])
+  user           User                      @relation(fields: [userId], references: [id])
+  role           Role?                     @relation(fields: [roleId], references: [id])
+  area           Area?                     @relation(fields: [areaId], references: [id])
+  locality       Locality?                 @relation(fields: [localityId], references: [id])
+  position       Position?                 @relation(fields: [positionId], references: [id])
+  approvedBy     User?                     @relation("MembershipApprovedBy", fields: [approvedById], references: [id])
+  localityScopes WorkspaceMemberLocality[]
+
+  @@unique([workspaceId, userId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([areaId])
+  @@index([localityId])
+  @@index([positionId])
+  @@index([approvedById])
+  @@index([status])
+}
+
+model WorkspaceMemberLocality {
+  id                String   @id @default(uuid())
+  workspaceMemberId String
+  localityId        String
+  createdAt         DateTime @default(now())
+
+  workspaceMember WorkspaceMember @relation(fields: [workspaceMemberId], references: [id], onDelete: Cascade)
+  locality        Locality        @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceMemberId, localityId])
+  @@index([workspaceMemberId])
+  @@index([localityId])
+}
+
+enum UserType {
+  INTERNAL
+  EXTERNAL
+}
+
+enum MemberStatus {
+  INVITED
+  PENDING_APPROVAL
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+model Area {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace            Workspace                @relation(fields: [workspaceId], references: [id])
+  members              WorkspaceMember[]
+  localities           Locality[]
+  positions            Position[]
+  projects             Project[]
+  invitations          Invitation[]
+  staffingRequestsFrom ProjectStaffingRequest[] @relation("StaffingSourceArea")
+  staffingRequestsTo   ProjectStaffingRequest[] @relation("StaffingTargetArea")
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model Locality {
+  id          String   @id @default(uuid())
+  workspaceId String
+  areaId      String?
+  name        String
+  code        String
+  description String?
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace        Workspace                 @relation(fields: [workspaceId], references: [id])
+  area             Area?                     @relation(fields: [areaId], references: [id])
+  members          WorkspaceMember[]
+  memberScopes     WorkspaceMemberLocality[]
+  projects         Project[]
+  invitations      Invitation[]
+  invitationScopes InvitationLocality[]
+  staffingRequests ProjectStaffingRequest[]
+
+  @@unique([workspaceId, areaId, code])
+  @@unique([workspaceId, areaId, name])
+  @@index([workspaceId])
+  @@index([areaId])
+}
+
+model Position {
+  id          String   @id @default(uuid())
+  workspaceId String
+  areaId      String?
+  name        String
+  description String?
+  isManager   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace        Workspace                @relation(fields: [workspaceId], references: [id])
+  area             Area?                    @relation(fields: [areaId], references: [id])
+  members          WorkspaceMember[]
+  invitations      Invitation[]
+  staffingRequests ProjectStaffingRequest[]
+
+  @@unique([workspaceId, areaId, name])
+  @@index([workspaceId])
+  @@index([areaId])
+  @@index([isManager])
+}
+
+model Role {
+  id          String   @id @default(uuid())
+  workspaceId String
+  name        String
+  description String?
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace               Workspace                @relation(fields: [workspaceId], references: [id])
+  permissions             RolePermission[]
+  members                 WorkspaceMember[]
+  projectMembers          ProjectMember[]
+  invitations             Invitation[]
+  projectStaffingRequests ProjectStaffingRequest[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId])
+}
+
+model Permission {
+  id          String  @id @default(uuid())
+  workspaceId String
+  key         String
+  description String?
+
+  workspace Workspace        @relation(fields: [workspaceId], references: [id])
+  roles     RolePermission[]
+
+  @@unique([workspaceId, key])
+  @@index([workspaceId])
+}
+
+model RolePermission {
+  id           String @id @default(uuid())
+  roleId       String
+  permissionId String
+
+  role       Role       @relation(fields: [roleId], references: [id])
+  permission Permission @relation(fields: [permissionId], references: [id])
+
+  @@unique([roleId, permissionId])
+  @@index([roleId])
+  @@index([permissionId])
+}
+
+model Project {
+  id          String            @id @default(uuid())
+  workspaceId String
+  areaId      String?
+  localityId  String?
+  name        String
+  description String?
+  visibility  ProjectVisibility @default(WORKSPACE)
+  color       String?
+  startDate   DateTime?
+  endDate     DateTime?
+  createdById String?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  archivedAt  DateTime?
+  deletedAt   DateTime?
+
+  workspace        Workspace                @relation(fields: [workspaceId], references: [id])
+  area             Area?                    @relation(fields: [areaId], references: [id])
+  locality         Locality?                @relation(fields: [localityId], references: [id])
+  createdBy        User?                    @relation("ProjectCreatedBy", fields: [createdById], references: [id])
+  members          ProjectMember[]
+  boards           Board[]
+  tasks            Task[]
+  invitations      Invitation[]
+  activityLogs     ActivityLog[]
+  staffingRequests ProjectStaffingRequest[]
+
+  @@index([workspaceId])
+  @@index([areaId])
+  @@index([localityId])
+  @@index([createdById])
+  @@index([deletedAt])
+}
+
+enum ProjectVisibility {
+  WORKSPACE
+  PRIVATE
+}
+
+model ProjectMember {
+  id        String   @id @default(uuid())
+  projectId String
+  userId    String
+  roleId    String?
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+  role    Role?   @relation(fields: [roleId], references: [id])
+
+  @@unique([projectId, userId])
+  @@index([projectId])
+  @@index([userId])
+  @@index([roleId])
+}
+
+model Board {
+  id          String    @id @default(uuid())
+  workspaceId String
+  projectId   String
+  name        String
+  description String?
+  position    Int       @default(0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  archivedAt  DateTime?
+  deletedAt   DateTime?
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id])
+  project   Project       @relation(fields: [projectId], references: [id])
+  statuses  BoardStatus[]
+  tasks     Task[]
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([deletedAt])
+}
+
+model BoardStatus {
+  id           String         @id @default(uuid())
+  boardId      String
+  name         String
+  color        String?
+  position     Int
+  category     StatusCategory @default(TODO)
+  countsAsDone Boolean        @default(false)
+  isDefault    Boolean        @default(false)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  board Board  @relation(fields: [boardId], references: [id])
+  tasks Task[]
+
+  @@unique([boardId, name])
+  @@index([boardId])
+  @@index([category])
+}
+
+enum StatusCategory {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  REVIEW
+  DONE
+  CANCELLED
+}
+
+model Task {
+  id              String       @id @default(uuid())
+  workspaceId     String
+  projectId       String
+  boardId         String
+  statusId        String
+  parentTaskId    String?
+  title           String
+  description     String?
+  priority        TaskPriority @default(MEDIUM)
+  startAt         DateTime?
+  dueAt           DateTime?
+  completedAt     DateTime?
+  estimateMinutes Int?
+  progress        Int          @default(0)
+  createdById     String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  archivedAt      DateTime?
+  deletedAt       DateTime?
+
+  workspace  Workspace   @relation(fields: [workspaceId], references: [id])
+  project    Project     @relation(fields: [projectId], references: [id])
+  board      Board       @relation(fields: [boardId], references: [id])
+  status     BoardStatus @relation(fields: [statusId], references: [id])
+  createdBy  User?       @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  parentTask Task?       @relation("Subtasks", fields: [parentTaskId], references: [id])
+  subtasks   Task[]      @relation("Subtasks")
+
+  assignees    TaskAssignee[]
+  comments     Comment[]
+  timeLogs     TimeLog[]
+  activityLogs ActivityLog[]
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([boardId])
+  @@index([statusId])
+  @@index([createdById])
+  @@index([completedAt])
+  @@index([dueAt])
+  @@index([deletedAt])
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model TaskAssignee {
+  id           String   @id @default(uuid())
+  taskId       String
+  userId       String
+  assignedById String?
+  assignedAt   DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([taskId, userId])
+  @@index([taskId])
+  @@index([userId])
+}
+
+model TimeLog {
+  id        String    @id @default(uuid())
+  taskId    String
+  userId    String
+  minutes   Int
+  note      String?
+  logDate   DateTime  @default(now())
+  startedAt DateTime?
+  endedAt   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  task Task @relation(fields: [taskId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([taskId])
+  @@index([userId])
+  @@index([logDate])
+  @@index([deletedAt])
+}
+
+model Comment {
+  id             String    @id @default(uuid())
+  taskId         String
+  userId         String
+  bodyCiphertext String
+  bodyNonce      String
+  bodyAuthTag    String
+  isInternal     Boolean   @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  deletedAt      DateTime?
+
+  task Task @relation(fields: [taskId], references: [id])
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([taskId])
+  @@index([userId])
+  @@index([deletedAt])
+}
+
+model ActivityLog {
+  id          String             @id @default(uuid())
+  workspaceId String
+  projectId   String?
+  taskId      String?
+  actorId     String?
+  entityType  ActivityEntityType
+  entityId    String
+  action      String
+  before      Json?
+  after       Json?
+  metadata    Json?
+  createdAt   DateTime           @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id])
+  project   Project?  @relation(fields: [projectId], references: [id])
+  actor     User?     @relation("ActivityActor", fields: [actorId], references: [id])
+  task      Task?     @relation(fields: [taskId], references: [id])
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([taskId])
+  @@index([actorId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+enum ActivityEntityType {
+  WORKSPACE
+  PROJECT
+  BOARD
+  TASK
+  COMMENT
+  TIME_LOG
+  USER
+  INVITATION
+  STAFFING_REQUEST
+}
+
+model Invitation {
+  id          String           @id @default(uuid())
+  workspaceId String
+  email       String
+  roleId      String?
+  areaId      String?
+  localityId  String?
+  positionId  String?
+  invitedById String?
+  userType    UserType         @default(INTERNAL)
+  status      InvitationStatus @default(PENDING)
+  tokenHash   String           @unique
+  expiresAt   DateTime
+  acceptedAt  DateTime?
+  revokedAt   DateTime?
+  projectId   String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  workspace      Workspace            @relation(fields: [workspaceId], references: [id])
+  role           Role?                @relation(fields: [roleId], references: [id])
+  area           Area?                @relation(fields: [areaId], references: [id])
+  locality       Locality?            @relation(fields: [localityId], references: [id])
+  position       Position?            @relation(fields: [positionId], references: [id])
+  invitedBy      User?                @relation("InvitationSentBy", fields: [invitedById], references: [id])
+  project        Project?             @relation(fields: [projectId], references: [id])
+  localityScopes InvitationLocality[]
+
+  @@index([workspaceId])
+  @@index([email])
+  @@index([roleId])
+  @@index([areaId])
+  @@index([localityId])
+  @@index([positionId])
+  @@index([projectId])
+  @@index([status])
+}
+
+model InvitationLocality {
+  id           String   @id @default(uuid())
+  invitationId String
+  localityId   String
+  createdAt    DateTime @default(now())
+
+  invitation Invitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+  locality   Locality   @relation(fields: [localityId], references: [id], onDelete: Cascade)
+
+  @@unique([invitationId, localityId])
+  @@index([invitationId])
+  @@index([localityId])
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+model ProjectStaffingRequest {
+  id               String                @id @default(uuid())
+  workspaceId      String
+  projectId        String
+  requesterId      String
+  sourceAreaId     String?
+  targetAreaId     String
+  targetLocalityId String?
+  positionId       String?
+  roleId           String?
+  requestedUserId  String?
+  quantity         Int                   @default(1)
+  note             String?
+  status           StaffingRequestStatus @default(PENDING)
+  respondedById    String?
+  respondedAt      DateTime?
+  responseNote     String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  workspace      Workspace                   @relation(fields: [workspaceId], references: [id])
+  project        Project                     @relation(fields: [projectId], references: [id])
+  requester      User                        @relation("StaffingRequestRequester", fields: [requesterId], references: [id])
+  responder      User?                       @relation("StaffingRequestResponder", fields: [respondedById], references: [id])
+  sourceArea     Area?                       @relation("StaffingSourceArea", fields: [sourceAreaId], references: [id])
+  targetArea     Area                        @relation("StaffingTargetArea", fields: [targetAreaId], references: [id])
+  targetLocality Locality?                   @relation(fields: [targetLocalityId], references: [id])
+  position       Position?                   @relation(fields: [positionId], references: [id])
+  role           Role?                       @relation(fields: [roleId], references: [id])
+  requestedUser  User?                       @relation("StaffingRequestedUser", fields: [requestedUserId], references: [id])
+  assignments    ProjectStaffingAssignment[]
+
+  @@index([workspaceId])
+  @@index([projectId])
+  @@index([requesterId])
+  @@index([sourceAreaId])
+  @@index([targetAreaId])
+  @@index([targetLocalityId])
+  @@index([positionId])
+  @@index([roleId])
+  @@index([requestedUserId])
+  @@index([respondedById])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model ProjectStaffingAssignment {
+  id           String   @id @default(uuid())
+  requestId    String
+  userId       String
+  assignedById String
+  createdAt    DateTime @default(now())
+
+  request ProjectStaffingRequest @relation(fields: [requestId], references: [id])
+  user    User                   @relation(fields: [userId], references: [id])
+
+  @@unique([requestId, userId])
+  @@index([requestId])
+  @@index([userId])
+  @@index([assignedById])
+}
+
+enum StaffingRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
