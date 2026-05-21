@@ -173,6 +173,11 @@ export function BoardView({
   const availableMembers = workspaceMembers.filter((member) => member.status === "ACTIVE" && !projectMemberUserIds.has(member.userId));
   const mainTasks = useMemo(() => tasks.filter((task) => !task.parentTaskId), [tasks]);
   const mainCompletedTasks = useMemo(() => completedTasks.filter((task) => !task.parentTaskId), [completedTasks]);
+  const completedEstimateMinutes = mainCompletedTasks.reduce((sum, task) => sum + (task.estimateMinutes ?? 0), 0);
+  const completedActualMinutes = mainCompletedTasks.reduce(
+    (sum, task) => sum + (task.timeLogs ?? []).reduce((logSum, log) => logSum + log.minutes, 0),
+    0
+  );
 
   const tasksByStatus = useMemo(() => {
     return statuses.map((status) => ({
@@ -430,6 +435,20 @@ export function BoardView({
         ) : (
           <p className="completed-policy">Las terminadas quedan bloqueadas; solo admin o gerente pueden reabrirlas.</p>
         )}
+
+        <section className="completed-project-summary">
+          <h3>Resumen de terminadas por proyecto</h3>
+          <div className="completed-summary-table">
+            <span>Proyecto</span>
+            <span>Terminadas</span>
+            <span>Estimado cerrado</span>
+            <span>Tiempo real</span>
+            <strong>{activeProject?.name ?? "Proyecto activo"}</strong>
+            <strong>{mainCompletedTasks.length}</strong>
+            <strong>{formatMinutes(completedEstimateMinutes)}</strong>
+            <strong>{formatMinutes(completedActualMinutes)}</strong>
+          </div>
+        </section>
       </section>
 
       {isCreateModalOpen ? (

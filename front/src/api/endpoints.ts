@@ -16,8 +16,10 @@ import type {
   StaffingRequest,
   StaffingRequestStatus,
   Task,
+  TaskAssignee,
   ActivityEvent,
   TaskComment,
+  TaskMention,
   TimeLog,
   UserType,
   WorkspaceListItem,
@@ -346,6 +348,22 @@ export function changeTaskStatus(token: string, taskId: string, statusId: string
     token,
     method: "PATCH",
     body: { statusId }
+  });
+}
+
+export function addTaskAssignee(token: string, taskId: string, userId: string) {
+  return apiRequest<{ assignee: TaskAssignee }>(`/tasks/${taskId}/assignees`, {
+    token,
+    method: "POST",
+    body: { userId }
+  });
+}
+
+export function mentionTaskUser(token: string, taskId: string, userId: string) {
+  return apiRequest<{ mention: TaskMention }>(`/tasks/${taskId}/mentions`, {
+    token,
+    method: "POST",
+    body: { userId }
   });
 }
 

@@ -11,6 +11,7 @@ import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { WorkspaceSelect } from "./components/WorkspaceSelect";
 import {
   addProjectMember,
+  addTaskAssignee,
   changeTaskStatus,
   approveStaffingRequest,
   approveWorkspaceMember,
@@ -40,6 +41,7 @@ import {
   listWorkspacePositions,
   listWorkspaceRoles,
   logout,
+  mentionTaskUser,
   rejectStaffingRequest,
   updateProject,
   updateTask,
@@ -900,6 +902,38 @@ export function App() {
       : project));
   }
 
+  async function handleAddTaskAssignee(taskId: string, userId: string) {
+    if (!token) {
+      throw new Error("Sesion no disponible.");
+    }
+
+    await addTaskAssignee(token, taskId, userId);
+
+    if (activeProjectIdRef.current) {
+      void loadProjectContext(activeProjectIdRef.current, { silent: true });
+    }
+
+    if (selectedTaskIdRef.current) {
+      void loadSelectedTaskDetail(selectedTaskIdRef.current, { silent: true });
+    }
+  }
+
+  async function handleMentionTaskUser(taskId: string, userId: string) {
+    if (!token) {
+      throw new Error("Sesion no disponible.");
+    }
+
+    await mentionTaskUser(token, taskId, userId);
+
+    if (activeProjectIdRef.current) {
+      void loadProjectContext(activeProjectIdRef.current, { silent: true });
+    }
+
+    if (selectedTaskIdRef.current) {
+      void loadSelectedTaskDetail(selectedTaskIdRef.current, { silent: true });
+    }
+  }
+
   async function handleTaskStatusChange(taskId: string, statusId: string) {
     if (!token) {
       return;
@@ -1316,6 +1350,7 @@ export function App() {
             subtasks={subtasks}
             statuses={boardStatuses}
             projectMembers={activeProject?.members ?? []}
+            workspaceMembers={members}
             comments={comments}
             timeLogs={timeLogs}
             events={taskEvents}
@@ -1331,6 +1366,8 @@ export function App() {
             onCreateSubtask={handleCreateSubtask}
             onSubtaskStatusChange={handleTaskStatusChange}
             onCreateSubtaskTimeLog={handleCreateSubtaskTimeLog}
+            onAddTaskAssignee={handleAddTaskAssignee}
+            onMentionTaskUser={handleMentionTaskUser}
             onCreateComment={handleCreateComment}
             onCreateTimeLog={handleCreateTimeLog}
           />

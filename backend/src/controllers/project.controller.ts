@@ -97,12 +97,22 @@ export async function listProjects(req: Request, res: Response) {
         ...(memberLocalityIds.length > 0 ? { localityId: { in: memberLocalityIds } } : {})
       }
       : { members: { some: { userId } } };
+  const mentionedProjectFilter: Prisma.ProjectWhereInput = {
+    tasks: {
+      some: {
+        ...activeRecordFilter,
+        mentions: {
+          some: { userId }
+        }
+      }
+    }
+  };
   const projectVisibilityFilter: Prisma.ProjectWhereInput =
     workspaceMembership.userType === "INTERNAL" && canViewAllProjects
       ? {}
       : workspaceMembership.userType === "INTERNAL" && canViewAreaProjects && workspaceMembership.areaId
-        ? { OR: [areaProjectFilter, { members: { some: { userId } } }] }
-        : { members: { some: { userId } } };
+        ? { OR: [areaProjectFilter, { members: { some: { userId } } }, mentionedProjectFilter] }
+        : { OR: [{ members: { some: { userId } } }, mentionedProjectFilter] };
 
   const projects = await prisma.project.findMany({
     where: {

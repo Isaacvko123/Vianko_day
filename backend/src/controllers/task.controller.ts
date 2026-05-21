@@ -3,7 +3,7 @@ import { prisma } from "../db/prisma.js";
 import { activeRecordFilter } from "../db/filters.js";
 import { clearNullableTimestamp } from "../db/nullable-values.js";
 import { AppError } from "../utils/app-error.js";
-import { assertProjectPermission, assertTaskPermission, assertTaskStatusChangePermission, canSeeInternalComments, roleHasPermission } from "../services/access-control.service.js";
+import { assertProjectPermission, assertTaskPermission, assertTaskStatusChangePermission, canSeeEveryTaskInProject, canSeeInternalComments, roleHasPermission } from "../services/access-control.service.js";
 import { emitRealtimeEvent } from "../services/realtime.service.js";
 import { auditJson } from "../utils/audit-json.js";
 import { decryptText, encryptText } from "../utils/crypto.js";
@@ -138,37 +138,90 @@ async function assertAssigneesCanWorkOnTask(board: BoardForTaskOperation, assign
   }
 }
 
+async function assertMentionedUserBelongsToWorkspace(workspaceId: string, targetUserId: string) {
+  const workspaceMembership = await prisma.workspaceMember.findUnique({
+    where: {
+      workspaceId_userId: {
+        workspaceId,
+        userId: targetUserId
+      }
+    }
+  });
+
+  if (!workspaceMembership || workspaceMembership.status !== "ACTIVE") {
+    throw new AppError(400, "MENTION_USER_INVALID", "Mentioned user must be an active workspace member.");
+  }
+}
+
 export async function listTasks(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const boardId = getParam(req, "boardId");
   const { limit, offset, statusId, assigneeId, view } = req.query;
   const taskView = view === "completed" ? "completed" : "active";
 
-  await getBoardAndAuthorizeTaskOperation(boardId, userId, "task.view_all");
+  const board = await getBoardAndAuthorizeTaskOperation(boardId, userId, "task.view_all");
+  const [workspaceMember, projectMember] = await Promise.all([
+    prisma.workspaceMember.findUnique({
+      where: {
+        workspaceId_userId: {
+          workspaceId: board.workspaceId,
+          userId
+        }
+      }
+    }),
+    prisma.projectMember.findFirst({
+      where: {
+        projectId: board.projectId,
+        userId
+      }
+    })
+  ]);
+  const canSeeEveryTask = await canSeeEveryTaskInProject(workspaceMember?.roleId ?? undefined, projectMember?.roleId ?? undefined);
+  const stateFilter = taskView === "completed"
+    ? {
+        OR: [
+          { completedAt: { not: clearNullableTimestamp } },
+          { status: { countsAsDone: true } }
+        ]
+      }
+    : {
+        OR: [
+          { status: { countsAsDone: false } },
+          { completedAt: { gte: getCompletedTaskVisibilityCutoff() } }
+        ]
+      };
+  const visibilityFilter = canSeeEveryTask
+    ? {}
+    : {
+        OR: [
+          { assignees: { some: { userId } } },
+          { mentions: { some: { userId } } }
+        ]
+      };
 
   const tasks = await prisma.task.findMany({
     where: {
       boardId,
       ...activeRecordFilter,
-      ...(taskView === "completed"
-        ? {
-            OR: [
-              { completedAt: { not: clearNullableTimestamp } },
-              { status: { countsAsDone: true } }
-            ]
-          }
-        : {
-            OR: [
-              { status: { countsAsDone: false } },
-              { completedAt: { gte: getCompletedTaskVisibilityCutoff() } }
-            ]
-          }),
+      AND: [stateFilter, visibilityFilter],
       statusId: statusId ? String(statusId) : undefined,
       assignees: assigneeId ? { some: { userId: String(assigneeId) } } : undefined
     },
     include: {
       status: true,
       assignees: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatarUrl: true
+            }
+          }
+        }
+      },
+      mentions: {
         include: {
           user: {
             select: {
@@ -238,6 +291,36 @@ export async function listSubtasks(req: Request, res: Response) {
               avatarUrl: true
             }
           }
+        }
+      },
+      mentions: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatarUrl: true
+            }
+          }
+        }
+      },
+      timeLogs: {
+        where: {
+          deletedAt: clearNullableTimestamp
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatarUrl: true
+            }
+          }
+        },
+        orderBy: {
+          logDate: "desc"
         }
       },
       _count: {
@@ -319,6 +402,18 @@ export async function createTask(req: Request, res: Response) {
             }
           }
         },
+        mentions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true
+              }
+            }
+          }
+        },
         _count: {
           select: {
             comments: true,
@@ -388,6 +483,18 @@ export async function updateTask(req: Request, res: Response) {
     include: {
       status: true,
       assignees: {
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              avatarUrl: true
+            }
+          }
+        }
+      },
+      mentions: {
         include: {
           user: {
             select: {
@@ -593,6 +700,75 @@ export async function addTaskAssignee(req: Request, res: Response) {
   });
 
   res.status(201).json({ assignee });
+}
+
+export async function mentionTaskUser(req: Request, res: Response) {
+  const userId = req.auth!.userId;
+  const targetUserId = req.body?.userId;
+  const taskId = getParam(req, "taskId");
+  const { task, workspaceMember } = await assertTaskPermission(userId, taskId, "task.assign");
+  await assertTaskCanStillBeEdited({ completedAt: task.completedAt ?? undefined }, workspaceMember.roleId ?? undefined);
+
+  if (!targetUserId) {
+    throw new AppError(400, "MENTION_USER_REQUIRED", "userId is required.");
+  }
+
+  await assertMentionedUserBelongsToWorkspace(task.workspaceId, targetUserId);
+
+  const mention = await prisma.taskMention.upsert({
+    where: {
+      taskId_userId: {
+        taskId: task.id,
+        userId: targetUserId
+      }
+    },
+    update: {
+      mentionedById: userId
+    },
+    create: {
+      taskId: task.id,
+      userId: targetUserId,
+      mentionedById: userId
+    },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          avatarUrl: true
+        }
+      }
+    }
+  });
+
+  await prisma.activityLog.create({
+    data: {
+      workspaceId: task.workspaceId,
+      projectId: task.projectId,
+      taskId: task.id,
+      actorId: userId,
+      entityType: "TASK",
+      entityId: task.id,
+      action: "task.mentioned",
+      after: auditJson({
+        userId: targetUserId
+      })
+    }
+  });
+
+  emitRealtimeEvent({
+    type: "task.mentioned",
+    workspaceId: task.workspaceId,
+    projectId: task.projectId,
+    boardId: task.boardId,
+    taskId: task.id,
+    actorId: userId,
+    title: "Usuario mencionado",
+    message: `Se menciono a ${mention.user.name} en ${task.title}.`
+  });
+
+  res.status(201).json({ mention });
 }
 
 export async function removeTaskAssignee(req: Request, res: Response) {

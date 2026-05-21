@@ -10,6 +10,7 @@ import {
   listTaskEvents,
   listTasks,
   listTimeLogs,
+  mentionTaskUser,
   removeTaskAssignee,
   updateTask
 } from "../controllers/task.controller.js";
@@ -36,6 +37,7 @@ taskRouter.get("/tasks/:taskId/subtasks", validate(taskIdParamsSchema), asyncHan
 taskRouter.patch("/tasks/:taskId", validate(updateTaskSchema), asyncHandler(updateTask));
 taskRouter.patch("/tasks/:taskId/status", validate(changeTaskStatusSchema), asyncHandler(changeTaskStatus));
 taskRouter.post("/tasks/:taskId/assignees", validate(taskAssigneeSchema), asyncHandler(addTaskAssignee));
+taskRouter.post("/tasks/:taskId/mentions", validate(taskAssigneeSchema), asyncHandler(mentionTaskUser));
 taskRouter.delete("/tasks/:taskId/assignees/:userId", validate(taskAssigneeSchema), asyncHandler(removeTaskAssignee));
 taskRouter.get("/tasks/:taskId/comments", validate(createCommentSchema.pick({ params: true })), asyncHandler(listComments));
 taskRouter.post("/tasks/:taskId/comments", validate(createCommentSchema), asyncHandler(createComment));

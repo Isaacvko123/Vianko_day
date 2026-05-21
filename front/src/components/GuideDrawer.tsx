@@ -70,11 +70,11 @@ const guideByView: Record<ViewKey, GuideContent> = {
   },
   board: {
     title: "Tutorial guiado del tablero",
-    purpose: "Aqui se ejecuta el trabajo. La vista principal muestra actividades principales; las subtareas viven dentro del detalle para no llenar el tablero de ruido.",
+    purpose: "Aqui se ejecuta el trabajo vivo. Gerencia/Admin/Lider TI ven todo; perfiles operativos ven solo lo asignado o lo mencionado.",
     steps: [
       {
         title: "Crea la actividad principal",
-        body: "Pulsa Nueva actividad. Captura objetivo, prioridad, fechas, estimado y asignados. Esa tarjeta representa una unidad de trabajo que alguien puede seguir.",
+        body: "Pulsa Nueva actividad. Captura objetivo, prioridad, fechas, estimado y asignados. Si falta una persona, primero agregala al proyecto desde Miembros proyecto.",
         target: "Boton Nueva actividad",
         selector: "[data-guide='board-new-task']",
         result: "La actividad aparece en su columna inicial y se puede abrir para detalle."
@@ -87,21 +87,28 @@ const guideByView: Record<ViewKey, GuideContent> = {
         result: "El detalle te deja registrar seguimiento sin perder el contexto del tablero."
       },
       {
+        title: "Controla quien la ve",
+        body: "En Resumen, gerencia puede asignar responsables o mencionar usuarios. Asignar los vuelve responsables; mencionar solo les da visibilidad y contexto sin convertirlos en responsables.",
+        target: "Asignacion y menciones",
+        selector: "[data-guide='task-access-panel']",
+        result: "La actividad queda visible para la persona correcta sin abrir todo el proyecto."
+      },
+      {
         title: "Divide trabajo en subtareas",
-        body: "En el detalle entra a Subtareas. Crea pasos concretos, asigna responsables y cambia su estado. Esto mide avance fino dentro de la actividad principal.",
+        body: "En el detalle entra a Subtareas. Crea pasos concretos con inicio, fin, estimado, responsable y registro de tiempo. Cada subtarea alimenta el resumen de horas.",
         target: "Panel de subtareas",
         selector: "[data-guide='task-subtasks-tab']",
         result: "La actividad principal muestra avance de subtareas y el tablero queda limpio."
       },
       {
         title: "Revisa terminadas sin ensuciar el tablero",
-        body: "Las terminadas quedan visibles en el tablero activo 3 dias y tambien se guardan en Archivo. Admin o gerente pueden reabrirlas si hubo error.",
+        body: "Las terminadas quedan separadas en Archivo. Revisa la tabla por proyecto para ver cuantas cerraron, cuanto se estimo y cuanto tiempo real se registro.",
         target: "Archivo de terminadas",
         selector: "[data-guide='board-completed']",
         result: "El seguimiento historico queda separado del trabajo vivo."
       }
     ],
-    checkpoints: ["Asignados reales", "Fechas y estimado completos", "Subtareas si el trabajo es grande", "Estado actualizado por responsable"]
+    checkpoints: ["Asignados responsables", "Menciones solo para visibilidad", "Fechas y estimado completos", "Tiempo registrado por subtarea"]
   },
   management: {
     title: "Tutorial guiado de gerencia",
@@ -133,11 +140,11 @@ const guideByView: Record<ViewKey, GuideContent> = {
   },
   members: {
     title: "Tutorial guiado de estructura y accesos",
-    purpose: "Aqui se controla quien existe, donde pertenece y que puede hacer. Es la zona delicada: roles, areas, localidades y puestos cambian permisos reales.",
+    purpose: "Aqui se controla quien existe, donde pertenece y que puede hacer. Roles, areas, localidades y puestos cambian visibilidad real.",
     steps: [
       {
         title: "Revisa el directorio",
-        body: "Aqui ves usuarios activos, area, localidades de alcance, puesto y rol. Usa Editar cuando necesites corregir accesos.",
+        body: "Cada tarjeta debe mostrar nombre completo, correo, area, localidades, puesto y rol. Si algo no cuadra, usa Editar antes de asignarle proyectos.",
         target: "Directorio de miembros",
         selector: ".people-grid",
         result: "Confirmas quien pertenece a cada area antes de invitar o aprobar mas personal."
@@ -151,13 +158,13 @@ const guideByView: Record<ViewKey, GuideContent> = {
       },
       {
         title: "Atiende pendientes",
-        body: "Abre Pendientes. Antes de aprobar, confirma rol, area, localidad, puesto y tipo de usuario. Esto limita lo que podra ver.",
+        body: "Abre Pendientes. Antes de aprobar, confirma rol, area, una o varias localidades, puesto y tipo de usuario. Esa decision limita proyectos y actividades visibles.",
         target: "Pestana Pendientes",
         selector: "[data-guide='members-pending-tab']",
         result: "El usuario entra activo con permisos y alcance correctos."
       }
     ],
-    checkpoints: ["Rol correcto", "Area correcta", "Localidad permitida", "Puesto ligado al area"]
+    checkpoints: ["Rol correcto", "Area correcta", "Localidades permitidas", "Puesto ligado al area"]
   },
   reports: {
     title: "Tutorial guiado de reportes",

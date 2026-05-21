@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { CalendarClock, CheckCircle2, Clock3, GitBranch, MessageSquareText, PanelRightClose, Plus, ShieldAlert, TimerReset } from "lucide-react";
 import { Button, EmptyState, LoadingState } from "./ui";
-import type { ActivityEvent, BoardStatus, ProjectMember, Task, TaskComment, TaskPriority, TimeLog } from "../types";
+import type { ActivityEvent, BoardStatus, ProjectMember, Task, TaskComment, TaskPriority, TimeLog, WorkspaceMember } from "../types";
 import { formatDate, formatMinutes, getDueSummary, getRangeLabel, initials } from "../lib/format";
 
 type TaskDetailPanelProps = {
@@ -9,6 +9,7 @@ type TaskDetailPanelProps = {
   subtasks: Task[];
   statuses: BoardStatus[];
   projectMembers: ProjectMember[];
+  workspaceMembers: WorkspaceMember[];
   comments: TaskComment[];
   timeLogs: TimeLog[];
   events: ActivityEvent[];
@@ -32,6 +33,8 @@ type TaskDetailPanelProps = {
   }) => Promise<void>;
   onSubtaskStatusChange: (taskId: string, statusId: string) => Promise<void>;
   onCreateSubtaskTimeLog: (taskId: string, minutes: number, note?: string) => Promise<void>;
+  onAddTaskAssignee: (taskId: string, userId: string) => Promise<void>;
+  onMentionTaskUser: (taskId: string, userId: string) => Promise<void>;
   onCreateComment: (body: string, isInternal: boolean) => Promise<void>;
   onCreateTimeLog: (minutes: number, note?: string) => Promise<void>;
 };
@@ -190,6 +193,7 @@ export function TaskDetailPanel({
   subtasks,
   statuses,
   projectMembers,
+  workspaceMembers,
   comments,
   timeLogs,
   events,
@@ -205,6 +209,8 @@ export function TaskDetailPanel({
   onCreateSubtask,
   onSubtaskStatusChange,
   onCreateSubtaskTimeLog,
+  onAddTaskAssignee,
+  onMentionTaskUser,
   onCreateComment,
   onCreateTimeLog
 }: TaskDetailPanelProps) {
@@ -214,6 +220,7 @@ export function TaskDetailPanel({
   const [planError, setPlanError] = useState("");
   const [subtaskError, setSubtaskError] = useState("");
   const [subtaskTimeError, setSubtaskTimeError] = useState("");
+  const [accessError, setAccessError] = useState("");
   const [isSavingPlan, setIsSavingPlan] = useState(false);
   const [isCreatingSubtask, setIsCreatingSubtask] = useState(false);
   const currentStatus = statuses.find((status) => status.id === task?.statusId);
@@ -240,6 +247,15 @@ export function TaskDetailPanel({
   const completedSubtasks = subtasks.filter((subtask) => getTaskDoneState(subtask, statuses)).length;
   const subtaskProgress = subtasks.length > 0 ? Math.round((completedSubtasks / subtasks.length) * 100) : 0;
   const participantNames = task ? getAssigneeNames(task) : "Sin asignados";
+  const mentionedNames = task?.mentions?.map((mention) => mention.user.name).join(", ") || "Sin menciones";
+  const currentAssigneeIds = new Set((task?.assignees ?? []).map((assignee) => assignee.userId));
+  const currentMentionIds = new Set((task?.mentions ?? []).map((mention) => mention.userId));
+  const projectAssignableMembers = projectMembers.filter((member) => !currentAssigneeIds.has(member.userId));
+  const mentionableMembers = workspaceMembers.filter((member) =>
+    member.status === "ACTIVE" &&
+    !currentAssigneeIds.has(member.userId) &&
+    !currentMentionIds.has(member.userId)
+  );
   const timeByUser = Array.from(
     visibleTimeLogs.reduce((rows, log) => {
       const userName = log.user?.name ?? "Usuario sin nombre";
@@ -256,6 +272,7 @@ export function TaskDetailPanel({
     setPlanError("");
     setSubtaskError("");
     setSubtaskTimeError("");
+    setAccessError("");
   }, [task?.id]);
 
   useEffect(() => {
@@ -369,6 +386,32 @@ export function TaskDetailPanel({
     }
   }
 
+  async function handleAddAssigneeSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAccessError("");
+
+    try {
+      const userId = readFormString(event.currentTarget, "userId");
+      await onAddTaskAssignee(task?.id ?? "", userId);
+      event.currentTarget.reset();
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "No se pudo asignar a la persona.");
+    }
+  }
+
+  async function handleMentionSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAccessError("");
+
+    try {
+      const userId = readFormString(event.currentTarget, "userId");
+      await onMentionTaskUser(task?.id ?? "", userId);
+      event.currentTarget.reset();
+    } catch (error) {
+      setAccessError(error instanceof Error ? error.message : "No se pudo mencionar a la persona.");
+    }
+  }
+
   if (!task) {
     return <></>;
   }
@@ -453,7 +496,38 @@ export function TaskDetailPanel({
             <div className="participant-panel">
               <span>Participantes asignados</span>
               <strong>{participantNames}</strong>
+              <span>Mencionados con visibilidad</span>
+              <strong>{mentionedNames}</strong>
             </div>
+            {canEditPlanning && !isLockedForCurrentUser ? (
+              <div className="task-access-panel" data-guide="task-access-panel">
+                <form onSubmit={handleAddAssigneeSubmit}>
+                  <label>
+                    Asignar responsable
+                    <select name="userId" required defaultValue="">
+                      <option value="" disabled>Persona del proyecto</option>
+                      {projectAssignableMembers.map((member) => (
+                        <option key={member.userId} value={member.userId}>{member.user.name} · {member.user.email}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button variant="secondary" type="submit" disabled={projectAssignableMembers.length === 0}>Asignar</Button>
+                </form>
+                <form onSubmit={handleMentionSubmit}>
+                  <label>
+                    Mencionar para dar visibilidad
+                    <select name="userId" required defaultValue="">
+                      <option value="" disabled>Usuario activo del workspace</option>
+                      {mentionableMembers.map((member) => (
+                        <option key={member.userId} value={member.userId}>{member.user.name} · {member.user.email}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <Button variant="secondary" type="submit" disabled={mentionableMembers.length === 0}>Mencionar</Button>
+                </form>
+                {accessError ? <p className="form-error">{accessError}</p> : undefined}
+              </div>
+            ) : undefined}
             <div className="subtask-summary-card" data-guide="task-subtasks-summary">
               <div>
                 <GitBranch size={18} />

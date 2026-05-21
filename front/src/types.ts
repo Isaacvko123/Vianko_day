@@ -189,6 +189,15 @@ export type TaskAssignee = {
   user: AuthUser;
 };
 
+export type TaskMention = {
+  id: string;
+  taskId: string;
+  userId: string;
+  mentionedById?: string;
+  createdAt: string;
+  user: AuthUser;
+};
+
 export type TaskCounts = {
   comments: number;
   timeLogs: number;
@@ -215,6 +224,7 @@ export type Task = {
   updatedAt: string;
   status?: BoardStatus;
   assignees?: TaskAssignee[];
+  mentions?: TaskMention[];
   timeLogs?: TimeLog[];
   _count?: TaskCounts;
 };

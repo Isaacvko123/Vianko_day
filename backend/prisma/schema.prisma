@@ -30,6 +30,7 @@ model User {
   timeLogs            TimeLog[]
   sessions            Session[]
   createdTasks        Task[]                      @relation("TaskCreatedBy")
+  mentionedTasks      TaskMention[]
   createdProjects     Project[]                   @relation("ProjectCreatedBy")
   invitationsSent     Invitation[]                @relation("InvitationSentBy")
   activityLogs        ActivityLog[]               @relation("ActivityActor")
@@ -396,6 +397,7 @@ model Task {
   subtasks   Task[]      @relation("Subtasks")
 
   assignees    TaskAssignee[]
+  mentions     TaskMention[]
   comments     Comment[]
   timeLogs     TimeLog[]
   activityLogs ActivityLog[]
@@ -430,6 +432,22 @@ model TaskAssignee {
   @@unique([taskId, userId])
   @@index([taskId])
   @@index([userId])
+}
+
+model TaskMention {
+  id            String   @id @default(uuid())
+  taskId        String
+  userId        String
+  mentionedById String?
+  createdAt     DateTime @default(now())
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([taskId, userId])
+  @@index([taskId])
+  @@index([userId])
+  @@index([mentionedById])
 }
 
 model TimeLog {

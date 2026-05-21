@@ -109,6 +109,38 @@ async function canManageAreaProjects(roleId: string | undefined) {
   return (await roleHasPermission(roleId, "project.create")) || (await roleHasPermission(roleId, "project.manage_members"));
 }
 
+export async function canSeeEveryTaskInProject(workspaceRoleId: string | undefined, projectRoleId?: string) {
+  const workspaceCanSeeAll =
+    (await roleHasPermission(workspaceRoleId, "workspace.manage")) ||
+    (await roleHasPermission(workspaceRoleId, "project.view_all")) ||
+    (await roleHasPermission(workspaceRoleId, "project.manage_members")) ||
+    (await roleHasPermission(workspaceRoleId, "task.create"));
+  const projectCanSeeAll =
+    (await roleHasPermission(projectRoleId, "project.view_all")) ||
+    (await roleHasPermission(projectRoleId, "project.manage_members")) ||
+    (await roleHasPermission(projectRoleId, "task.create"));
+
+  return workspaceCanSeeAll || projectCanSeeAll;
+}
+
+function requiresTaskScopedVisibility(permissionKey: PermissionKey) {
+  return ["task.view_all", "task.comment", "task.log_time", "task.update_progress"].includes(permissionKey);
+}
+
+async function canSeeTaskByAssignmentOrMention(userId: string, taskId: string) {
+  const visibleTaskCount = await prisma.task.count({
+    where: {
+      id: taskId,
+      OR: [
+        { assignees: { some: { userId } } },
+        { mentions: { some: { userId } } }
+      ]
+    }
+  });
+
+  return visibleTaskCount > 0;
+}
+
 /**
  * El acceso a proyecto es mas estricto que el acceso a workspace.
  * Colaboradores solo ven proyectos donde fueron agregados.
@@ -136,6 +168,15 @@ export async function assertProjectAccess(userId: string, projectId: string) {
   const canViewAreaProjects = await canManageAreaProjects(workspaceMembership.roleId ?? undefined);
   const memberLocalityIds = await getWorkspaceMemberLocalityIds(workspaceMembership);
   const isProjectMember = Boolean(project.members[0]);
+  const isMentionedInProject = (await prisma.taskMention.count({
+    where: {
+      userId,
+      task: {
+        projectId,
+        ...activeRecordFilter
+      }
+    }
+  })) > 0;
   const canEnterAreaProject = canEnterProjectByArea({
     canViewAreaProjects,
     projectVisibility: project.visibility,
@@ -147,14 +188,14 @@ export async function assertProjectAccess(userId: string, projectId: string) {
 
   if (
     workspaceMembership.userType === "INTERNAL" &&
-    (canViewAllProjects || isProjectMember || canEnterAreaProject)
+    (canViewAllProjects || isProjectMember || canEnterAreaProject || isMentionedInProject)
   ) {
     return { project, workspaceMember: workspaceMembership, projectMember: project.members[0] };
   }
 
   const projectMembership = project.members[0];
 
-  if (!projectMembership) {
+  if (!projectMembership && !isMentionedInProject) {
     throw new AppError(403, "PROJECT_ACCESS_DENIED", "You do not have access to this project.");
   }
 
@@ -194,6 +235,15 @@ export async function assertTaskPermission(userId: string, taskId: string, permi
   }
 
   const access = await assertProjectPermission(userId, task.projectId, permissionKey);
+
+  if (
+    requiresTaskScopedVisibility(permissionKey) &&
+    !(await canSeeEveryTaskInProject(access.workspaceMember.roleId ?? undefined, access.projectMember?.roleId ?? undefined)) &&
+    !(await canSeeTaskByAssignmentOrMention(userId, task.id))
+  ) {
+    throw new AppError(403, "TASK_VISIBILITY_DENIED", "You can only access assigned or mentioned tasks.");
+  }
+
   return { task, ...access };
 }
 

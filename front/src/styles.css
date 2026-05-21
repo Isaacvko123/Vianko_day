@@ -1446,6 +1446,42 @@ select:focus-visible {
   padding-top: 12px;
 }
 
+.completed-project-summary {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.completed-project-summary h3 {
+  font-size: 15px;
+  font-weight: 950;
+}
+
+.completed-summary-table {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) repeat(3, minmax(120px, 0.8fr));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.completed-summary-table span,
+.completed-summary-table strong {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.completed-summary-table strong {
+  border-bottom: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
 .detail-panel {
   position: sticky;
   top: 24px;
@@ -1603,6 +1639,26 @@ select:focus-visible {
   color: var(--text);
   font-size: 14px;
   line-height: 1.35;
+}
+
+.task-access-panel {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 12px;
+}
+
+.task-access-panel form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.task-access-panel .form-error {
+  margin: 0;
 }
 
 .subtask-summary-card,
@@ -2306,15 +2362,37 @@ select:focus-visible {
 
 .people-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
 }
 
 .member-card-pro {
   position: relative;
   overflow: hidden;
-  min-height: 116px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  align-items: start;
+  min-height: 150px;
+  padding: 16px;
   transition: transform 170ms ease, border-color 170ms ease, box-shadow 170ms ease;
+}
+
+.member-card-pro > div {
+  min-width: 0;
+}
+
+.member-card-pro > em,
+.member-card-pro .member-role {
+  grid-column: 2;
+  justify-self: start;
+}
+
+.member-card-pro .member-edit-button {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.member-card-pro small {
+  overflow-wrap: anywhere;
 }
 
 .member-card-pro::before {
@@ -3219,6 +3297,7 @@ select:focus-visible {
   .project-form-grid,
   .task-table-head,
   .task-row,
+  .completed-summary-table,
   .member-card,
   .approval-form,
   .inline-control,
@@ -3229,6 +3308,7 @@ select:focus-visible {
   .subtask-form,
   .subtask-metrics,
   .subtask-time-form,
+  .task-access-panel form,
   .management-board,
   .project-grid,
   .subtask-progress,

@@ -34,6 +34,7 @@ export type RealtimeEventType =
   | "task.reopened"
   | "task.assigned"
   | "task.unassigned"
+  | "task.mentioned"
   | "comment.created"
   | "time.logged"
   | "staffing.requested"

@@ -53,6 +53,7 @@ export const ROLE_DEFINITIONS: Array<{
     description: "Soporte tecnico avanzado: usuarios, areas/puestos y seguimiento, sin crear proyectos.",
     permissions: [
       "workspace.invite_users",
+      "project.view_all",
       "area.approve_members",
       "locality.manage",
       "position.manage",
