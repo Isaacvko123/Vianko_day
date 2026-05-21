@@ -38,9 +38,26 @@ export function MainLayout({
   onLogout
 }: MainLayoutProps) {
   const [isGuideOpen, setIsGuideOpen] = useState(false);
-  const visibleNavItems = getWorkspaceCapabilities(workspace).canSeeAdminViews
-    ? navItems
-    : navItems.filter((item) => item.key === "projects" || item.key === "board");
+  const capabilities = getWorkspaceCapabilities(workspace);
+  const visibleNavItems = navItems.filter((item) => {
+    if (item.key === "projects" || item.key === "board") {
+      return true;
+    }
+
+    if (item.key === "management") {
+      return capabilities.canViewManagement;
+    }
+
+    if (item.key === "members") {
+      return capabilities.canViewMembers;
+    }
+
+    if (item.key === "reports") {
+      return capabilities.canViewWorkspaceReports;
+    }
+
+    return false;
+  });
 
   return (
     <div className="app-shell">

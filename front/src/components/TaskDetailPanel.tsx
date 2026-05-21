@@ -389,11 +389,12 @@ export function TaskDetailPanel({
   async function handleAddAssigneeSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAccessError("");
+    const form = event.currentTarget;
 
     try {
-      const userId = readFormString(event.currentTarget, "userId");
+      const userId = readFormString(form, "userId");
       await onAddTaskAssignee(task?.id ?? "", userId);
-      event.currentTarget.reset();
+      form.reset();
     } catch (error) {
       setAccessError(error instanceof Error ? error.message : "No se pudo asignar a la persona.");
     }
@@ -402,11 +403,12 @@ export function TaskDetailPanel({
   async function handleMentionSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setAccessError("");
+    const form = event.currentTarget;
 
     try {
-      const userId = readFormString(event.currentTarget, "userId");
+      const userId = readFormString(form, "userId");
       await onMentionTaskUser(task?.id ?? "", userId);
-      event.currentTarget.reset();
+      form.reset();
     } catch (error) {
       setAccessError(error instanceof Error ? error.message : "No se pudo mencionar a la persona.");
     }

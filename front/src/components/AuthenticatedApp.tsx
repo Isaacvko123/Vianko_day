@@ -56,6 +56,10 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     return undefined;
   }
 
+  const visibleGlobalError = globalError.startsWith("Missing permission:")
+    ? ""
+    : globalError;
+
   return (
     <MainLayout
       session={session}
@@ -67,7 +71,7 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
       onChangeWorkspace={actions.handleChangeWorkspace}
       onLogout={actions.handleLogout}
     >
-      {globalError ? <div className="global-error">{globalError}</div> : undefined}
+      {visibleGlobalError ? <div className="global-error">{visibleGlobalError}</div> : undefined}
 
       {currentView === "projects" ? (
         <ProjectsView

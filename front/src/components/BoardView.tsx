@@ -52,6 +52,10 @@ function getTaskEstimateLabel(task: Task) {
   return task.estimateMinutes ? formatMinutes(task.estimateMinutes) : "Falta estimar";
 }
 
+function getTaskActualMinutes(task: Task) {
+  return (task.timeLogs ?? []).reduce((sum, log) => sum + log.minutes, 0);
+}
+
 function toIsoDate(dateValue: string) {
   return dateValue ? new Date(`${dateValue}T00:00:00.000Z`).toISOString() : undefined;
 }
@@ -393,31 +397,52 @@ export function BoardView({
         />
       ) : undefined}
 
-      <section className="completed-archive" aria-label="Actividades terminadas" data-guide="board-completed">
+      <section className="completed-archive completed-workspace" aria-label="Actividades terminadas" data-guide="board-completed">
         <header className="completed-archive-header">
           <div>
             <p className="eyebrow">Archivo</p>
-            <h2>Terminadas</h2>
+            <h2>Actividades terminadas</h2>
             <span>
-              El tablero activo conserva terminadas durante 3 dias; aqui queda el historial para revisar o reabrir.
+              Salen del tablero operativo y quedan en esta vista de cierre para revisar tiempo, fechas y reapertura autorizada.
             </span>
           </div>
           <strong>{mainCompletedTasks.length}</strong>
         </header>
 
         {mainCompletedTasks.length > 0 ? (
-          <div className="completed-archive-grid">
+          <div className="completed-archive-table">
+            <span>Actividad</span>
+            <span>Fechas</span>
+            <span>Estimado</span>
+            <span>Real</span>
+            <span>Estado</span>
             {mainCompletedTasks.map((task) => (
-              <TaskCard
-                key={task.id}
-                task={task}
-                statuses={statuses}
-                currentUserId={currentUserId}
-                canEditCompletedTasks={canEditCompletedTasks}
-                selected={selectedTaskId === task.id}
-                onSelect={onSelectTask}
-                onTaskStatusChange={onTaskStatusChange}
-              />
+              <article key={task.id} className={selectedTaskId === task.id ? "selected" : ""}>
+                <button type="button" onClick={() => onSelectTask(task.id)}>
+                  <strong>{task.title}</strong>
+                  <small>{task.description || "Sin descripcion"}</small>
+                </button>
+                <span>
+                  <small>Inicio {formatDate(task.startAt)}</small>
+                  <small>Fin {formatDate(task.dueAt)}</small>
+                  <small>Cierre {formatDate(task.completedAt)}</small>
+                </span>
+                <strong>{getTaskEstimateLabel(task)}</strong>
+                <strong>{formatMinutes(getTaskActualMinutes(task))}</strong>
+                {canEditCompletedTasks ? (
+                  <select
+                    value={task.statusId}
+                    aria-label={`Cambiar estado de ${task.title}`}
+                    onChange={(event) => void onTaskStatusChange(task.id, event.target.value)}
+                  >
+                    {statuses.map((status) => (
+                      <option key={status.id} value={status.id}>{status.name}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <em>{statuses.find((status) => status.id === task.statusId)?.name ?? "Terminado"}</em>
+                )}
+              </article>
             ))}
           </div>
         ) : (

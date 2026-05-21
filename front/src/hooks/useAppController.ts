@@ -109,7 +109,7 @@ export function useAppController() {
   const reports = useReportsController({
     token,
     workspaceId,
-    enabled: currentView === "reports",
+    enabled: currentView === "reports" && permissions.canViewWorkspaceReports,
     onError: setGlobalError
   });
 
@@ -306,7 +306,11 @@ export function useAppController() {
         void management.actions.loadManagement(options);
         void people.actions.loadWorkspaceCatalog(options);
       },
-      reports: (options) => void reports.actions.loadReports(options),
+      reports: (options) => {
+        if (permissions.canViewWorkspaceReports) {
+          void reports.actions.loadReports(options);
+        }
+      },
       projectContext: (projectId, options) => void projectBoard.actions.loadProjectContext(projectId, options),
       taskDetail: (taskId, options) => void projectBoard.actions.loadSelectedTaskDetail(taskId, options)
     },

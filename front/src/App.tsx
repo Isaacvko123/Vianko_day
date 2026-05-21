@@ -31,13 +31,33 @@ export function App() {
     );
   }
 
-  function appRoute() {
+  function canAccessPath(path: string) {
+    if (path === "/management") {
+      return controller.permissions.canViewManagement;
+    }
+
+    if (path === "/members") {
+      return controller.permissions.canViewMembers;
+    }
+
+    if (path === "/reports") {
+      return controller.permissions.canViewWorkspaceReports;
+    }
+
+    return true;
+  }
+
+  function appRoute(path: string) {
     if (!controller.session) {
       return <Navigate to="/login" replace />;
     }
 
     if (!controller.selectedWorkspace) {
       return <Navigate to="/workspaces" replace />;
+    }
+
+    if (!canAccessPath(path)) {
+      return <Navigate to="/projects" replace />;
     }
 
     return <AuthenticatedApp controller={controller} />;
@@ -52,7 +72,7 @@ export function App() {
       />
       <Route path="/workspaces" element={workspaceSelectRoute()} />
       {appRoutes.map((path) => (
-        <Route key={path} path={path} element={appRoute()} />
+        <Route key={path} path={path} element={appRoute(path)} />
       ))}
       <Route path="*" element={<Navigate to={homePath} replace />} />
     </Routes>
