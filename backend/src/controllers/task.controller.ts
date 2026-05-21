@@ -194,6 +194,7 @@ export async function listTasks(req: Request, res: Response) {
     ? {}
     : {
         OR: [
+          { createdById: userId },
           { assignees: { some: { userId } } },
           { mentions: { some: { userId } } }
         ]

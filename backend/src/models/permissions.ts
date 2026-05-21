@@ -50,16 +50,20 @@ export const ROLE_DEFINITIONS: Array<{
   },
   {
     name: "Lider TI",
-    description: "Soporte tecnico avanzado: usuarios, areas/puestos y seguimiento, sin crear proyectos.",
+    description: "Coordina trabajo tecnico propio o asignado. Crea, edita y asigna sin ver todo el workspace.",
     permissions: [
       "workspace.invite_users",
-      "project.view_all",
       "area.approve_members",
       "locality.manage",
       "position.manage",
       "member.manage",
+      "project.create",
+      "project.update",
+      "project.manage_members",
+      "project.request_staffing",
       "staffing.respond",
       "board.update",
+      "task.create",
       "task.update",
       "task.update_progress",
       "task.assign",
@@ -80,6 +84,7 @@ export const ROLE_DEFINITIONS: Array<{
       "position.manage",
       "project.create",
       "project.update",
+      "project.view_all",
       "project.manage_members",
       "project.request_staffing",
       "staffing.respond",
@@ -95,6 +100,31 @@ export const ROLE_DEFINITIONS: Array<{
       "task.view_all",
       "report.view_project",
       "report.view_workspace"
+    ]
+  },
+  {
+    name: "Coordinador",
+    description: "Coordina proyectos y actividades propias o asignadas, sin visibilidad total.",
+    permissions: [
+      "workspace.invite_users",
+      "area.approve_members",
+      "position.manage",
+      "project.create",
+      "project.update",
+      "project.manage_members",
+      "project.request_staffing",
+      "staffing.respond",
+      "board.create",
+      "board.update",
+      "task.create",
+      "task.update",
+      "task.update_progress",
+      "task.assign",
+      "task.change_status",
+      "task.comment",
+      "task.log_time",
+      "task.view_all",
+      "report.view_project"
     ]
   },
   {

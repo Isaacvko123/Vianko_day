@@ -106,25 +106,21 @@ function canEnterProjectByArea(input: {
 }
 
 async function canManageAreaProjects(roleId: string | undefined) {
-  return (await roleHasPermission(roleId, "project.create")) || (await roleHasPermission(roleId, "project.manage_members"));
+  return (await roleHasPermission(roleId, "project.view_all")) || (await roleHasPermission(roleId, "workspace.manage"));
 }
 
 export async function canSeeEveryTaskInProject(workspaceRoleId: string | undefined, projectRoleId?: string) {
   const workspaceCanSeeAll =
     (await roleHasPermission(workspaceRoleId, "workspace.manage")) ||
-    (await roleHasPermission(workspaceRoleId, "project.view_all")) ||
-    (await roleHasPermission(workspaceRoleId, "project.manage_members")) ||
-    (await roleHasPermission(workspaceRoleId, "task.create"));
+    (await roleHasPermission(workspaceRoleId, "project.view_all"));
   const projectCanSeeAll =
-    (await roleHasPermission(projectRoleId, "project.view_all")) ||
-    (await roleHasPermission(projectRoleId, "project.manage_members")) ||
-    (await roleHasPermission(projectRoleId, "task.create"));
+    (await roleHasPermission(projectRoleId, "project.view_all"));
 
   return workspaceCanSeeAll || projectCanSeeAll;
 }
 
 function requiresTaskScopedVisibility(permissionKey: PermissionKey) {
-  return ["task.view_all", "task.comment", "task.log_time", "task.update_progress"].includes(permissionKey);
+  return ["task.view_all", "task.comment", "task.log_time", "task.update_progress", "task.update", "task.assign"].includes(permissionKey);
 }
 
 async function canSeeTaskByAssignmentOrMention(userId: string, taskId: string) {
@@ -132,6 +128,7 @@ async function canSeeTaskByAssignmentOrMention(userId: string, taskId: string) {
     where: {
       id: taskId,
       OR: [
+        { createdById: userId },
         { assignees: { some: { userId } } },
         { mentions: { some: { userId } } }
       ]
