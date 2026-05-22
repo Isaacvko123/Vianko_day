@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { CalendarDays, CirclePlus, Edit3, FolderKanban, Lock, RefreshCw, TimerReset, Users, X } from "lucide-react";
+import { Archive, CalendarDays, CirclePlus, Edit3, FolderKanban, Lock, RefreshCw, TimerReset, Users, X } from "lucide-react";
 import { Badge, Button, EmptyState, LoadingState, PageHeader, StatCard } from "./ui";
 import type { Area, Locality, Project } from "../types";
 import { formatDate, getDueSummary } from "../lib/format";
@@ -11,6 +11,7 @@ type ProjectsViewProps = {
   activeProjectId?: string;
   isLoading: boolean;
   canCreateProjects: boolean;
+  canDeleteProjects: boolean;
   onRefresh: () => void;
   onSelectProject: (projectId: string) => void;
   onCreateProject: (input: {
@@ -33,6 +34,7 @@ type ProjectsViewProps = {
     startDate?: string;
     endDate?: string;
   }) => Promise<void>;
+  onArchiveProject: (projectId: string) => Promise<void>;
 };
 
 function readFormString(form: HTMLFormElement, fieldName: string) {
@@ -55,13 +57,16 @@ export function ProjectsView({
   activeProjectId,
   isLoading,
   canCreateProjects,
+  canDeleteProjects,
   onRefresh,
   onSelectProject,
   onCreateProject,
-  onUpdateProject
+  onUpdateProject,
+  onArchiveProject
 }: ProjectsViewProps) {
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
+  const [isArchiving, setIsArchiving] = useState(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [projectToEdit, setProjectToEdit] = useState<Project>();
   const [selectedAreaId, setSelectedAreaId] = useState("");
@@ -152,6 +157,33 @@ export function ProjectsView({
       setErrorMessage(error instanceof Error ? error.message : "No se pudo actualizar el proyecto.");
     } finally {
       setIsUpdating(false);
+    }
+  }
+
+  async function handleArchiveProject() {
+    setErrorMessage("");
+
+    if (!projectToEdit) {
+      setErrorMessage("Selecciona un proyecto para archivar.");
+      return;
+    }
+
+    const shouldArchive = window.confirm(`Archivar "${projectToEdit.name}" lo quitara de la operacion activa, tableros y reportes vigentes. El historial queda guardado para auditoria. ¿Continuar?`);
+
+    if (!shouldArchive) {
+      return;
+    }
+
+    setIsArchiving(true);
+
+    try {
+      await onArchiveProject(projectToEdit.id);
+      setProjectToEdit(undefined);
+      setEditAreaId("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "No se pudo archivar el proyecto.");
+    } finally {
+      setIsArchiving(false);
     }
   }
 
@@ -368,6 +400,18 @@ export function ProjectsView({
                 <input name="color" type="color" defaultValue={projectToEdit.color ?? "#2563eb"} />
               </label>
               {errorMessage ? <p className="form-error wide-field">{errorMessage}</p> : undefined}
+              {canDeleteProjects ? (
+                <section className="project-danger-zone wide-field">
+                  <span>
+                    <strong>Archivar proyecto</strong>
+                    <small>Quita el proyecto de la operacion activa sin borrar auditoria, actividades ni tiempos historicos.</small>
+                  </span>
+                  <button className="secondary-action danger-soft" type="button" disabled={isArchiving} onClick={() => void handleArchiveProject()}>
+                    <Archive size={18} />
+                    {isArchiving ? "Archivando..." : "Archivar"}
+                  </button>
+                </section>
+              ) : undefined}
               <div className="modal-actions">
                 <button className="ghost-button" type="button" onClick={() => setProjectToEdit(undefined)}>Cancelar</button>
                 <button className="primary-action" type="submit" disabled={isUpdating}>

@@ -222,6 +222,8 @@ export async function createProject(req: Request, res: Response) {
     workspaceId,
     projectId: result.project.id,
     actorId: userId,
+    recipientUserIds: [userId],
+    visibility: "recipients",
     title: "Proyecto creado",
     message: `Se creo el proyecto ${result.project.name}.`
   });
@@ -352,6 +354,131 @@ export async function updateProject(req: Request, res: Response) {
   res.json({ project: updatedProject });
 }
 
+async function getProjectArchiveRecipientUserIds(project: {
+  id: string;
+  workspaceId: string;
+  areaId?: string | null;
+}) {
+  const recipients = await prisma.workspaceMember.findMany({
+    where: {
+      workspaceId: project.workspaceId,
+      status: "ACTIVE",
+      OR: [
+        {
+          user: {
+            projectMembers: {
+              some: {
+                projectId: project.id
+              }
+            }
+          }
+        },
+        {
+          role: {
+            permissions: {
+              some: {
+                permission: {
+                  key: "workspace.manage"
+                }
+              }
+            }
+          }
+        },
+        {
+          areaId: project.areaId ?? undefined,
+          role: {
+            permissions: {
+              some: {
+                permission: {
+                  key: "project.view_all"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    select: {
+      userId: true
+    }
+  });
+
+  return [...new Set(recipients.map((recipient) => recipient.userId))];
+}
+
+export async function archiveProject(req: Request, res: Response) {
+  const userId = req.auth!.userId;
+  const projectId = getParam(req, "projectId");
+  const { project } = await assertProjectPermission(userId, projectId, "project.delete");
+  const archiveDate = new Date();
+  const recipientUserIds = await getProjectArchiveRecipientUserIds(project);
+
+  const archivedProject = await prisma.$transaction(async (tx) => {
+    const updatedProject = await tx.project.update({
+      where: {
+        id: project.id
+      },
+      data: {
+        archivedAt: archiveDate,
+        deletedAt: archiveDate
+      },
+      include: {
+        area: true,
+        locality: true,
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true
+              }
+            },
+            role: true
+          }
+        }
+      }
+    });
+
+    await tx.activityLog.create({
+      data: {
+        workspaceId: project.workspaceId,
+        projectId: project.id,
+        actorId: userId,
+        entityType: "PROJECT",
+        entityId: project.id,
+        action: "project.archived",
+        before: {
+          name: project.name,
+          archivedAt: project.archivedAt,
+          deletedAt: project.deletedAt
+        },
+        after: {
+          name: project.name,
+          archivedAt: archiveDate,
+          deletedAt: archiveDate
+        }
+      }
+    });
+
+    return updatedProject;
+  });
+
+  emitRealtimeEvent({
+    type: "project.archived",
+    workspaceId: project.workspaceId,
+    projectId: project.id,
+    actorId: userId,
+    recipientUserIds,
+    visibility: "recipients",
+    title: "Proyecto archivado",
+    message: `Se archivo el proyecto ${project.name}.`
+  });
+
+  res.json({ project: archivedProject });
+}
+
 export async function addProjectMember(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const projectId = getParam(req, "projectId");
@@ -448,6 +575,8 @@ export async function addProjectMember(req: Request, res: Response) {
     workspaceId: project.workspaceId,
     projectId: project.id,
     actorId: userId,
+    recipientUserIds: [targetUserId],
+    visibility: "project",
     title: "Miembro agregado",
     message: `${projectMembership.user.name} fue agregado a ${project.name}.`
   });

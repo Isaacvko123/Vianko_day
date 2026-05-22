@@ -10,7 +10,7 @@ function getClientIp(req: Request) {
 }
 
 /**
- * Crea un access token corto y un refresh token opaco de vida larga.
+ * Crea un access token corto y un refresh token opaco de rotacion diaria.
  * El refresh token se muestra una sola vez al cliente; la DB guarda solo su hash HMAC.
  */
 export async function createSession(userId: string, req: Request) {

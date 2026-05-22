@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { uuidParam } from "./common.schemas.js";
+import { paginationQuery, uuidParam } from "./common.schemas.js";
 
 export const listStaffingRequestsSchema = z.object({
-  query: z.object({
+  query: paginationQuery.extend({
     workspaceId: uuidParam,
     status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]).optional()
   })

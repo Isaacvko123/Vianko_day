@@ -10,6 +10,7 @@ import {
 import { emitRealtimeEvent } from "../services/realtime.service.js";
 import { AppError } from "../utils/app-error.js";
 import { auditJson } from "../utils/audit-json.js";
+import { paginationMeta, readPagination } from "../utils/pagination.js";
 import { getParam, getQueryString } from "../utils/request.js";
 
 const userSelect = {
@@ -167,11 +168,56 @@ function uniqueUserIds(userIds: string[]) {
   return [...new Set(userIds)];
 }
 
+async function getStaffingResponderUserIds(workspaceId: string, targetAreaId: string) {
+  const responders = await prisma.workspaceMember.findMany({
+    where: {
+      workspaceId,
+      status: "ACTIVE",
+      OR: [
+        {
+          role: {
+            permissions: {
+              some: {
+                permission: {
+                  key: {
+                    in: ["workspace.manage", "member.manage"]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          areaId: targetAreaId,
+          role: {
+            permissions: {
+              some: {
+                permission: {
+                  key: "staffing.respond"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    select: {
+      userId: true
+    }
+  });
+
+  return responders.map((responder) => responder.userId);
+}
+
 export async function listStaffingRequests(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const workspaceId = getQueryString(req, "workspaceId");
   const { member, canManage } = await canManageAllStaffing(userId, workspaceId);
   const status = typeof req.query.status === "string" ? req.query.status as StaffingRequestStatus : undefined;
+  const { limit, offset } = readPagination({
+    limit: Number(req.query.limit),
+    offset: Number(req.query.offset)
+  });
   const personalStaffingFilters: Prisma.ProjectStaffingRequestWhereInput[] = [
     { requesterId: userId },
     {
@@ -192,20 +238,29 @@ export async function listStaffingRequests(req: Request, res: Response) {
     : {
       OR: personalStaffingFilters
     };
+  const where: Prisma.ProjectStaffingRequestWhereInput = {
+    workspaceId,
+    status,
+    ...scopedFilter
+  };
 
-  const staffingRequests = await prisma.projectStaffingRequest.findMany({
-    where: {
-      workspaceId,
-      status,
-      ...scopedFilter
-    },
-    include: staffingRequestInclude,
-    orderBy: {
-      createdAt: "desc"
-    }
+  const [total, staffingRequests] = await Promise.all([
+    prisma.projectStaffingRequest.count({ where }),
+    prisma.projectStaffingRequest.findMany({
+      where,
+      include: staffingRequestInclude,
+      orderBy: {
+        createdAt: "desc"
+      },
+      take: limit,
+      skip: offset
+    })
+  ]);
+
+  res.json({
+    staffingRequests,
+    pagination: paginationMeta(total, limit, offset)
   });
-
-  res.json({ staffingRequests });
 }
 
 export async function createStaffingRequest(req: Request, res: Response) {
@@ -313,6 +368,11 @@ export async function createStaffingRequest(req: Request, res: Response) {
     workspaceId: staffingRequest.workspaceId,
     projectId: staffingRequest.projectId,
     actorId: userId,
+    recipientUserIds: uniqueUserIds([
+      userId,
+      ...(await getStaffingResponderUserIds(staffingRequest.workspaceId, staffingRequest.targetAreaId))
+    ]),
+    visibility: "recipients",
     title: "Solicitud de personal",
     message: `Se solicito apoyo para ${staffingRequest.project.name}.`
   });
@@ -434,6 +494,11 @@ export async function approveStaffingRequest(req: Request, res: Response) {
     workspaceId: updatedRequest.workspaceId,
     projectId: updatedRequest.projectId,
     actorId: userId,
+    recipientUserIds: uniqueUserIds([
+      updatedRequest.requesterId,
+      ...updatedRequest.assignments.map((assignment) => assignment.userId)
+    ]),
+    visibility: "recipients",
     title: "Solicitud aprobada",
     message: `Se aprobo apoyo para ${updatedRequest.project.name}.`
   });
@@ -484,6 +549,8 @@ export async function rejectStaffingRequest(req: Request, res: Response) {
     workspaceId: updatedRequest.workspaceId,
     projectId: updatedRequest.projectId,
     actorId: userId,
+    recipientUserIds: uniqueUserIds([updatedRequest.requesterId]),
+    visibility: "recipients",
     title: "Solicitud rechazada",
     message: `Se rechazo apoyo para ${updatedRequest.project.name}.`
   });

@@ -19,7 +19,7 @@ const environmentSchema = z.object({
   TOKEN_HASH_SECRET: z.string().min(32),
   JWT_ISSUER: z.string().min(3).default("vianko-day-api"),
   ACCESS_TOKEN_TTL_SECONDS: z.coerce.number().int().min(60).max(3600).default(900),
-  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  REFRESH_TOKEN_TTL_DAYS: z.coerce.number().int().min(1).max(90).default(1),
   CORS_ORIGINS: z.string().default("http://localhost:3000"),
   COMMENT_ENCRYPTION_KEY: z.string().min(32),
   LOG_HASH_SECRET: z.string().min(32)

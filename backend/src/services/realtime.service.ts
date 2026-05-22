@@ -25,6 +25,7 @@ export type RealtimeEventType =
   | "workspace.member_updated"
   | "project.created"
   | "project.updated"
+  | "project.archived"
   | "project.member_added"
   | "board.created"
   | "board.status_created"
@@ -92,8 +93,29 @@ type SocketData = {
 
 let realtimeServer: Server<ClientToServerEvents, ServerToClientEvents, object, SocketData> | undefined;
 
+type RealtimeVisibility = "workspace" | "project" | "task" | "recipients";
+
+export type RealtimeEventInput = Omit<RealtimeEvent, "id" | "createdAt"> & {
+  recipientUserIds?: string[];
+  visibility?: RealtimeVisibility;
+};
+
+const workspaceScopedEvents = new Set<RealtimeEventType>([
+  "workspace.created",
+  "workspace.user_invited",
+  "workspace.area_saved",
+  "workspace.locality_saved",
+  "workspace.position_saved",
+  "workspace.member_approved",
+  "workspace.member_updated"
+]);
+
 function workspaceRoom(workspaceId: string) {
   return `workspace:${workspaceId}`;
+}
+
+function userRoom(userId: string) {
+  return `user:${userId}`;
 }
 
 function projectRoom(projectId: string) {
@@ -135,6 +157,45 @@ function emitSocketError(
   error: Omit<RealtimeClientError, "createdAt">
 ) {
   socket.emit("realtime:error", toClientError(error));
+}
+
+function getDefaultVisibility(event: RealtimeEventInput): RealtimeVisibility {
+  if (workspaceScopedEvents.has(event.type)) {
+    return "workspace";
+  }
+
+  if (event.projectId) {
+    return "project";
+  }
+
+  if (event.taskId) {
+    return "task";
+  }
+
+  return event.recipientUserIds?.length ? "recipients" : "workspace";
+}
+
+function getEventRooms(event: RealtimeEventInput) {
+  const visibility = event.visibility ?? getDefaultVisibility(event);
+  const rooms = new Set<string>();
+
+  for (const recipientUserId of event.recipientUserIds ?? []) {
+    rooms.add(userRoom(recipientUserId));
+  }
+
+  if (visibility === "workspace") {
+    rooms.add(workspaceRoom(event.workspaceId));
+  }
+
+  if (visibility === "project" && event.projectId) {
+    rooms.add(projectRoom(event.projectId));
+  }
+
+  if (visibility === "task" && event.taskId) {
+    rooms.add(taskRoom(event.taskId));
+  }
+
+  return [...rooms];
 }
 
 function assertJoinBudget(socket: Socket<ClientToServerEvents, ServerToClientEvents, object, SocketData>, ack?: RealtimeAckCallback) {
@@ -276,6 +337,8 @@ export function initializeRealtime(server: http.Server) {
   });
 
   realtimeServer.on("connection", (socket) => {
+    socket.join(userRoom(socket.data.userId));
+
     socket.on("workspace:join", (payload, ack) => {
       if (!assertJoinBudget(socket, ack)) return;
       const parsedPayload = joinWorkspaceSchema.safeParse(payload);
@@ -372,21 +435,17 @@ export function initializeRealtime(server: http.Server) {
   });
 }
 
-export function emitRealtimeEvent(event: Omit<RealtimeEvent, "id" | "createdAt">) {
+export function emitRealtimeEvent(event: RealtimeEventInput) {
   if (!realtimeServer) {
     return;
   }
 
-  const realtimeEvent = toRealtimeEvent(event);
-  let target = realtimeServer.to(workspaceRoom(event.workspaceId));
+  const { recipientUserIds, visibility, ...clientEvent } = event;
+  const targetRooms = getEventRooms({ ...clientEvent, recipientUserIds, visibility });
 
-  if (event.projectId) {
-    target = target.to(projectRoom(event.projectId));
+  if (targetRooms.length === 0) {
+    return;
   }
 
-  if (event.taskId) {
-    target = target.to(taskRoom(event.taskId));
-  }
-
-  target.emit("realtime:event", realtimeEvent);
+  realtimeServer.to(targetRooms).emit("realtime:event", toRealtimeEvent(clientEvent));
 }

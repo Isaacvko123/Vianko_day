@@ -9,7 +9,6 @@ type BoardViewProps = {
   activeProject?: Project;
   activeBoard?: Board;
   tasks: Task[];
-  completedTasks: Task[];
   boardMode: BoardMode;
   isLoading: boolean;
   currentUserId: string;
@@ -50,10 +49,6 @@ function readFormStrings(form: HTMLFormElement, fieldName: string) {
 
 function getTaskEstimateLabel(task: Task) {
   return task.estimateMinutes ? formatMinutes(task.estimateMinutes) : "Falta estimar";
-}
-
-function getTaskActualMinutes(task: Task) {
-  return (task.timeLogs ?? []).reduce((sum, log) => sum + log.minutes, 0);
 }
 
 function toIsoDate(dateValue: string) {
@@ -147,7 +142,6 @@ export function BoardView({
   activeProject,
   activeBoard,
   tasks,
-  completedTasks,
   boardMode,
   isLoading,
   currentUserId,
@@ -176,12 +170,6 @@ export function BoardView({
   const projectMemberUserIds = new Set(projectMembers.map((member) => member.userId));
   const availableMembers = workspaceMembers.filter((member) => member.status === "ACTIVE" && !projectMemberUserIds.has(member.userId));
   const mainTasks = useMemo(() => tasks.filter((task) => !task.parentTaskId), [tasks]);
-  const mainCompletedTasks = useMemo(() => completedTasks.filter((task) => !task.parentTaskId), [completedTasks]);
-  const completedEstimateMinutes = mainCompletedTasks.reduce((sum, task) => sum + (task.estimateMinutes ?? 0), 0);
-  const completedActualMinutes = mainCompletedTasks.reduce(
-    (sum, task) => sum + (task.timeLogs ?? []).reduce((logSum, log) => logSum + log.minutes, 0),
-    0
-  );
 
   const tasksByStatus = useMemo(() => {
     return statuses.map((status) => ({
@@ -396,85 +384,6 @@ export function BoardView({
           action={canCreateTasks ? <Button icon={<Plus size={18} />} variant="primary" onClick={() => setIsCreateModalOpen(true)}>Nueva actividad</Button> : undefined}
         />
       ) : undefined}
-
-      <section className="completed-archive completed-workspace" aria-label="Actividades terminadas" data-guide="board-completed">
-        <header className="completed-archive-header">
-          <div>
-            <p className="eyebrow">Archivo</p>
-            <h2>Actividades terminadas</h2>
-            <span>
-              Salen del tablero operativo y quedan en esta vista de cierre para revisar tiempo, fechas y reapertura autorizada.
-            </span>
-          </div>
-          <strong>{mainCompletedTasks.length}</strong>
-        </header>
-
-        {mainCompletedTasks.length > 0 ? (
-          <div className="completed-archive-table">
-            <span>Actividad</span>
-            <span>Fechas</span>
-            <span>Estimado</span>
-            <span>Real</span>
-            <span>Estado</span>
-            {mainCompletedTasks.map((task) => (
-              <article key={task.id} className={selectedTaskId === task.id ? "selected" : ""}>
-                <button type="button" onClick={() => onSelectTask(task.id)}>
-                  <strong>{task.title}</strong>
-                  <small>{task.description || "Sin descripcion"}</small>
-                </button>
-                <span>
-                  <small>Inicio {formatDate(task.startAt)}</small>
-                  <small>Fin {formatDate(task.dueAt)}</small>
-                  <small>Cierre {formatDate(task.completedAt)}</small>
-                </span>
-                <strong>{getTaskEstimateLabel(task)}</strong>
-                <strong>{formatMinutes(getTaskActualMinutes(task))}</strong>
-                {canEditCompletedTasks ? (
-                  <select
-                    value={task.statusId}
-                    aria-label={`Cambiar estado de ${task.title}`}
-                    onChange={(event) => void onTaskStatusChange(task.id, event.target.value)}
-                  >
-                    {statuses.map((status) => (
-                      <option key={status.id} value={status.id}>{status.name}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <em>{statuses.find((status) => status.id === task.statusId)?.name ?? "Terminado"}</em>
-                )}
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="completed-empty">
-            <EmptyState
-              icon={<ClipboardList size={24} />}
-              title="Aun no hay terminadas"
-              description="Cuando una actividad pase a Terminado aparecera aqui sin ensuciar el tablero operativo."
-            />
-          </div>
-        )}
-
-        {canEditCompletedTasks ? (
-          <p className="completed-policy">Admin y gerente pueden reabrir una terminada cambiando su estado desde este archivo.</p>
-        ) : (
-          <p className="completed-policy">Las terminadas quedan bloqueadas; solo admin o gerente pueden reabrirlas.</p>
-        )}
-
-        <section className="completed-project-summary">
-          <h3>Resumen de terminadas por proyecto</h3>
-          <div className="completed-summary-table">
-            <span>Proyecto</span>
-            <span>Terminadas</span>
-            <span>Estimado cerrado</span>
-            <span>Tiempo real</span>
-            <strong>{activeProject?.name ?? "Proyecto activo"}</strong>
-            <strong>{mainCompletedTasks.length}</strong>
-            <strong>{formatMinutes(completedEstimateMinutes)}</strong>
-            <strong>{formatMinutes(completedActualMinutes)}</strong>
-          </div>
-        </section>
-      </section>
 
       {isCreateModalOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="create-task-title">

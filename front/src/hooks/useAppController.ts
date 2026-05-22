@@ -5,6 +5,7 @@ import {
   createWorkspace,
   listWorkspaces,
   logout,
+  refreshSession,
   type CreateProjectInput,
   type CreateWorkspaceInput,
   type UpdateProjectInput
@@ -46,6 +47,10 @@ function pathToView(pathname: string): ViewKey | undefined {
 
   if (normalizedPath === "/board") {
     return "board";
+  }
+
+  if (normalizedPath === "/completed") {
+    return "completed";
   }
 
   if (normalizedPath === "/management") {
@@ -173,6 +178,43 @@ export function useAppController() {
   }, [session?.tokens.accessToken]);
 
   useEffect(() => {
+    if (!session) {
+      return undefined;
+    }
+
+    const refreshDelayMs = Math.max(30_000, session.tokens.expiresIn * 1000 - 60_000);
+    let isCancelled = false;
+
+    const refreshTimer = window.setTimeout(() => {
+      void refreshSession(session.tokens.refreshToken)
+        .then((response) => {
+          if (isCancelled) {
+            return;
+          }
+
+          const refreshedSession = {
+            ...session,
+            tokens: response.tokens
+          };
+
+          setSession(refreshedSession);
+          storeSession(refreshedSession);
+          void queryClient.invalidateQueries();
+        })
+        .catch(() => {
+          if (!isCancelled) {
+            handleLogout();
+          }
+        });
+    }, refreshDelayMs);
+
+    return () => {
+      isCancelled = true;
+      window.clearTimeout(refreshTimer);
+    };
+  }, [session?.tokens.accessToken, session?.tokens.expiresIn, session?.tokens.refreshToken, queryClient]);
+
+  useEffect(() => {
     if (workspacesQuery.data) {
       applyWorkspaces(workspacesQuery.data.workspaces);
     }
@@ -203,6 +245,10 @@ export function useAppController() {
 
     if (currentView === "reports") {
       void reports.actions.loadReports();
+    }
+
+    if (currentView === "completed") {
+      void projectBoard.actions.loadCompletedArchive();
     }
   }, [currentView, token, workspaceId]);
 
@@ -258,6 +304,11 @@ export function useAppController() {
     await projectBoard.actions.handleUpdateProject(projectId, input);
   }
 
+  async function handleArchiveProject(projectId: string) {
+    await projectBoard.actions.handleArchiveProject(projectId);
+    navigate("/projects");
+  }
+
   function clearWorkspaceSelection() {
     clearStoredWorkspace();
     setSelectedWorkspace(undefined);
@@ -311,6 +362,11 @@ export function useAppController() {
           void reports.actions.loadReports(options);
         }
       },
+      completedArchive: (options) => {
+        if (currentView === "completed") {
+          void projectBoard.actions.loadCompletedArchive(options);
+        }
+      },
       projectContext: (projectId, options) => void projectBoard.actions.loadProjectContext(projectId, options),
       taskDetail: (taskId, options) => void projectBoard.actions.loadSelectedTaskDetail(taskId, options)
     },
@@ -335,6 +391,7 @@ export function useAppController() {
     activeProjectId: projectBoard.activeProjectId,
     activeProject: projectBoard.activeProject,
     activeBoard: projectBoard.activeBoard,
+    completedArchive: projectBoard.completedArchive,
     boardStatuses: projectBoard.boardStatuses,
     tasks: projectBoard.tasks,
     completedTasks: projectBoard.completedTasks,
@@ -351,12 +408,17 @@ export function useAppController() {
     localities: people.localities,
     positions: people.positions,
     staffingRequests: management.staffingRequests,
+    staffingPagination: management.staffingPagination,
+    staffingPages: management.staffingPages,
+    staffingPageSize: management.staffingPageSize,
     summary: reports.summary,
+    reportPeriod: reports.reportPeriod,
     currentView,
     boardMode: projectBoard.boardMode,
     isLoadingWorkspaces: workspacesQuery.isFetching,
     isLoadingProjects: projectBoard.isLoadingProjects,
     isLoadingBoard: projectBoard.isLoadingBoard,
+    isLoadingCompletedArchive: projectBoard.isLoadingCompletedArchive,
     isLoadingDetail: projectBoard.isLoadingDetail,
     isLoadingMembers: people.isLoadingMembers,
     isLoadingManagement: management.isLoadingManagement,
@@ -374,9 +436,11 @@ export function useAppController() {
       loadWorkspaces,
       loadProjects: projectBoard.actions.loadProjects,
       loadProjectContext: projectBoard.actions.loadProjectContext,
+      loadCompletedArchive: projectBoard.actions.loadCompletedArchive,
       loadMembers: people.actions.loadMembers,
       loadManagement: management.actions.loadManagement,
       loadReports: reports.actions.loadReports,
+      setReportPeriod: reports.actions.setReportPeriod,
       dismissNotification,
       handleEnableBrowserNotifications: requestBrowserNotifications,
       handleAuthenticated,
@@ -384,12 +448,14 @@ export function useAppController() {
       handleCreateWorkspace,
       handleCreateProject,
       handleUpdateProject,
+      handleArchiveProject,
       handleCreateTask: projectBoard.actions.handleCreateTask,
       handleCreateSubtask: projectBoard.actions.handleCreateSubtask,
       handleAddProjectMember: projectBoard.actions.handleAddProjectMember,
       handleAddTaskAssignee: projectBoard.actions.handleAddTaskAssignee,
       handleMentionTaskUser: projectBoard.actions.handleMentionTaskUser,
       handleTaskStatusChange: projectBoard.actions.handleTaskStatusChange,
+      handleOpenArchivedTask: projectBoard.actions.handleOpenArchivedTask,
       handleCreateSubtaskTimeLog: projectBoard.actions.handleCreateSubtaskTimeLog,
       handleUpdateTaskPlan: projectBoard.actions.handleUpdateTaskPlan,
       handleCreateComment: projectBoard.actions.handleCreateComment,
@@ -403,6 +469,7 @@ export function useAppController() {
       handleCreateStaffingRequest: management.actions.handleCreateStaffingRequest,
       handleApproveStaffingRequest: management.actions.handleApproveStaffingRequest,
       handleRejectStaffingRequest: management.actions.handleRejectStaffingRequest,
+      setStaffingStatusPage: management.actions.setStaffingStatusPage,
       handleChangeWorkspace,
       handleLogout,
       handleGoToLogin

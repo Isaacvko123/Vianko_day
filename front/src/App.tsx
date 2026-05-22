@@ -4,7 +4,7 @@ import { AuthScreen } from "./components/AuthScreen";
 import { WorkspaceSelect } from "./components/WorkspaceSelect";
 import { useAppController } from "./hooks/useAppController";
 
-const appRoutes = ["/projects", "/board", "/management", "/members", "/reports"];
+const appRoutes = ["/projects", "/board", "/completed", "/management", "/members", "/reports"];
 
 export function App() {
   const controller = useAppController();

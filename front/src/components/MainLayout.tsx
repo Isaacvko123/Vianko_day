@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from "react";
-import { BarChart3, Bell, BriefcaseBusiness, HelpCircle, KanbanSquare, LogOut, Network, UsersRound } from "lucide-react";
+import { Archive, BarChart3, Bell, BriefcaseBusiness, HelpCircle, KanbanSquare, LogOut, Network, UsersRound } from "lucide-react";
 import { GuideDrawer } from "./GuideDrawer";
 import { Badge, Button, cx } from "./ui";
 import type { AuthSession, ViewKey, WorkspaceListItem } from "../types";
@@ -21,6 +21,7 @@ type MainLayoutProps = {
 const navItems: Array<{ key: ViewKey; label: string; icon: ReactNode }> = [
   { key: "projects", label: "Proyectos", icon: <BriefcaseBusiness size={18} /> },
   { key: "board", label: "Tablero", icon: <KanbanSquare size={18} /> },
+  { key: "completed", label: "Terminadas", icon: <Archive size={18} /> },
   { key: "management", label: "Gerencia", icon: <Network size={18} /> },
   { key: "members", label: "Miembros", icon: <UsersRound size={18} /> },
   { key: "reports", label: "Reportes", icon: <BarChart3 size={18} /> }
@@ -40,7 +41,7 @@ export function MainLayout({
   const [isGuideOpen, setIsGuideOpen] = useState(false);
   const capabilities = getWorkspaceCapabilities(workspace);
   const visibleNavItems = navItems.filter((item) => {
-    if (item.key === "projects" || item.key === "board") {
+    if (item.key === "projects" || item.key === "board" || item.key === "completed") {
       return true;
     }
 

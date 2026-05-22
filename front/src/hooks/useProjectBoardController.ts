@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   addProjectMember,
   addTaskAssignee,
+  archiveProject,
   changeTaskStatus,
   createComment,
   createProject,
@@ -47,6 +48,11 @@ type TaskDetailData = {
   events: ActivityEvent[];
 };
 
+export type CompletedProjectArchive = {
+  project: Project;
+  tasks: Task[];
+};
+
 export function useProjectBoardController({ token, workspaceId, onError, clearError }: UseProjectBoardControllerOptions) {
   const queryClient = useQueryClient();
   const [projects, setProjects] = useState<Project[]>([]);
@@ -56,6 +62,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   const [activeBoardId, setActiveBoardId] = useState<string>();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
+  const [completedArchive, setCompletedArchive] = useState<CompletedProjectArchive[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
   const [subtasks, setSubtasks] = useState<Task[]>([]);
   const [comments, setComments] = useState<TaskComment[]>([]);
@@ -66,7 +73,10 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   const selectedTaskIdRef = useRef<string>();
 
   const activeBoard = boards.find((board) => board.id === activeBoardId) ?? boards[0];
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId) ?? completedTasks.find((task) => task.id === selectedTaskId);
+  const archivedCompletedTasks = completedArchive.flatMap((projectArchive) => projectArchive.tasks);
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId)
+    ?? completedTasks.find((task) => task.id === selectedTaskId)
+    ?? archivedCompletedTasks.find((task) => task.id === selectedTaskId);
   const boardStatuses = activeBoard?.statuses ?? [];
   const visibleProjects = useMemo(() => projects, [projects]);
 
@@ -171,6 +181,37 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     }
   }
 
+  async function fetchCompletedArchive(): Promise<CompletedProjectArchive[]> {
+    if (!token || !workspaceId) {
+      throw new Error("Sesion o workspace no disponible.");
+    }
+
+    const projectsResponse = await listProjects(token, workspaceId);
+    const archiveGroups = await Promise.all(projectsResponse.projects.map(async (project) => {
+      const projectResponse = await getProject(token, project.id);
+      const projectBoards = projectResponse.project.boards ?? [];
+      const taskResponses = await Promise.all(projectBoards.map((board) => listTasks(token, board.id, "completed")));
+      const completedProjectTasks = taskResponses
+        .flatMap((response) => response.tasks)
+        .filter((task) => !task.parentTaskId)
+        .sort((leftTask, rightTask) => {
+          const leftDate = leftTask.completedAt ?? leftTask.dueAt ?? leftTask.updatedAt;
+          const rightDate = rightTask.completedAt ?? rightTask.dueAt ?? rightTask.updatedAt;
+          return new Date(rightDate).getTime() - new Date(leftDate).getTime();
+        });
+
+      return {
+        project: {
+          ...project,
+          boards: projectBoards
+        },
+        tasks: completedProjectTasks
+      };
+    }));
+
+    return archiveGroups.filter((group) => group.tasks.length > 0);
+  }
+
   const projectsQuery = useQuery({
     queryKey: queryKeys.projects(workspaceId),
     queryFn: async () => {
@@ -193,6 +234,12 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     queryKey: queryKeys.taskDetail(selectedTaskId),
     queryFn: () => fetchTaskDetail(selectedTaskId!),
     enabled: Boolean(token && selectedTaskId)
+  });
+
+  const completedArchiveQuery = useQuery({
+    queryKey: queryKeys.completedArchive(workspaceId),
+    queryFn: fetchCompletedArchive,
+    enabled: false
   });
 
   async function loadProjects(options: LoadOptions = {}) {
@@ -264,6 +311,29 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     }
   }
 
+  async function loadCompletedArchive(options: LoadOptions = {}) {
+    if (!token || !workspaceId) {
+      return;
+    }
+
+    if (!options.silent) {
+      clearError();
+    }
+
+    try {
+      const archive = await queryClient.fetchQuery({
+        queryKey: queryKeys.completedArchive(workspaceId),
+        queryFn: fetchCompletedArchive,
+        staleTime: 0
+      });
+      setCompletedArchive(archive);
+    } catch (error) {
+      if (!options.silent) {
+        onError(error instanceof Error ? error.message : "No se pudo cargar el archivo de terminadas.");
+      }
+    }
+  }
+
   async function handleCreateProject(input: {
     areaId?: string;
     localityId?: string;
@@ -314,6 +384,27 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     if (activeProjectId === projectId) {
       setActiveProject(response.project);
     }
+  }
+
+  async function handleArchiveProject(projectId: string) {
+    if (!token || !workspaceId) {
+      throw new Error("Sesion o workspace no disponible.");
+    }
+
+    await archiveProject(token, projectId);
+    void queryClient.invalidateQueries({ queryKey: queryKeys.projects(workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reports(workspaceId) });
+    setProjects((currentProjects) => {
+      const nextProjects = currentProjects.filter((project) => project.id !== projectId);
+
+      if (activeProjectIdRef.current === projectId) {
+        setActiveProjectId(nextProjects[0]?.id);
+        setSelectedTaskId(undefined);
+      }
+
+      return nextProjects;
+    });
+    setCompletedArchive((currentArchive) => currentArchive.filter((group) => group.project.id !== projectId));
   }
 
   async function handleCreateTask(input: {
@@ -463,6 +554,14 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       ]);
     } else {
       setCompletedTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskId));
+      setCompletedArchive((currentArchive) =>
+        currentArchive
+          .map((group) => ({
+            ...group,
+            tasks: group.tasks.filter((task) => task.id !== taskId)
+          }))
+          .filter((group) => group.tasks.length > 0)
+      );
       setTasks((currentTasks) => {
         const existingTask = currentTasks.find((task) => task.id === taskId);
 
@@ -559,6 +658,13 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     }
   }
 
+  function handleOpenArchivedTask(projectId: string, taskId: string) {
+    setActiveProjectId(projectId);
+    setSelectedTaskId(taskId);
+    void loadProjectContext(projectId, { silent: true });
+    void loadSelectedTaskDetail(taskId, { silent: true });
+  }
+
   function initializeWorkspaceProject(project: Project, board: Board) {
     setProjects([project]);
     setActiveProject(project);
@@ -567,6 +673,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     setActiveBoardId(board.id);
     setTasks([]);
     setCompletedTasks([]);
+    setCompletedArchive([]);
     setSelectedTaskId(undefined);
   }
 
@@ -627,6 +734,12 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   }, [taskDetailQuery.error]);
 
   useEffect(() => {
+    if (completedArchiveQuery.data) {
+      setCompletedArchive(completedArchiveQuery.data);
+    }
+  }, [completedArchiveQuery.dataUpdatedAt]);
+
+  useEffect(() => {
     if (!selectedTaskId) {
       queryClient.removeQueries({ queryKey: queryKeys.taskDetail() });
       setSubtasks([]);
@@ -658,6 +771,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     boardStatuses,
     tasks,
     completedTasks,
+    completedArchive,
     selectedTaskId,
     selectedTask,
     subtasks,
@@ -667,6 +781,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     boardMode,
     isLoadingProjects: projectsQuery.isFetching,
     isLoadingBoard: projectContextQuery.isFetching,
+    isLoadingCompletedArchive: completedArchiveQuery.isFetching,
     isLoadingDetail: taskDetailQuery.isFetching,
     actions: {
       setActiveProjectId,
@@ -675,14 +790,17 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       loadProjects,
       loadProjectContext,
       loadSelectedTaskDetail,
+      loadCompletedArchive,
       handleCreateProject,
       handleUpdateProject,
+      handleArchiveProject,
       handleCreateTask,
       handleCreateSubtask,
       handleAddProjectMember,
       handleAddTaskAssignee,
       handleMentionTaskUser,
       handleTaskStatusChange,
+      handleOpenArchivedTask,
       handleCreateSubtaskTimeLog,
       handleUpdateTaskPlan,
       handleCreateComment,

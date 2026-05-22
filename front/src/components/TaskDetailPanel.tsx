@@ -266,7 +266,7 @@ export function TaskDetailPanel({
   ).map(([name, minutes]) => ({ name, minutes }));
 
   useEffect(() => {
-    setActiveTab("summary");
+    setActiveTab(task?.completedAt ? "events" : "summary");
     setCommentError("");
     setTimeError("");
     setPlanError("");

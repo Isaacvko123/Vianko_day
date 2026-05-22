@@ -101,14 +101,42 @@ const guideByView: Record<ViewKey, GuideContent> = {
         result: "La actividad principal muestra avance de subtareas y el tablero queda limpio."
       },
       {
-        title: "Revisa terminadas sin ensuciar el tablero",
-        body: "Las terminadas quedan separadas en Archivo. Revisa la tabla por proyecto para ver cuantas cerraron, cuanto se estimo y cuanto tiempo real se registro.",
-        target: "Archivo de terminadas",
-        selector: "[data-guide='board-completed']",
-        result: "El seguimiento historico queda separado del trabajo vivo."
+        title: "Consulta cierres fuera del tablero",
+        body: "Cuando una actividad termina, deja de vivir en el tablero operativo. Entra a Terminadas para revisar cierres por proyecto con filtros por fechas.",
+        target: "Navegacion Terminadas",
+        selector: "[data-guide='nav-completed']",
+        result: "El tablero se mantiene limpio y el archivo queda consultable aparte."
       }
     ],
     checkpoints: ["Asignados responsables", "Menciones solo para visibilidad", "Fechas y estimado completos", "Tiempo registrado por subtarea"]
+  },
+  completed: {
+    title: "Tutorial guiado de actividades terminadas",
+    purpose: "Aqui se auditan cierres por proyecto sin mezclar trabajo vivo con historial.",
+    steps: [
+      {
+        title: "Filtra el archivo",
+        body: "Usa busqueda, proyecto, inicio y fin para encontrar cierres por rango de fechas. Esto sirve para revisar entregas de una semana, quincena o proyecto completo.",
+        target: "Filtros de terminadas",
+        selector: "[data-guide='completed-filters']",
+        result: "La tabla se reduce a las actividades cerradas que realmente quieres revisar."
+      },
+      {
+        title: "Revisa por proyecto",
+        body: "Cada bloque pertenece a un proyecto. La tabla muestra nombre, descripcion, inicio y fin para leer el cierre sin abrir el kanban.",
+        target: "Tablas por proyecto",
+        selector: "[data-guide='completed-projects']",
+        result: "Puedes comparar cierres por proyecto sin perder contexto."
+      },
+      {
+        title: "Abre el historial",
+        body: "Da clic en una fila para abrir el detalle. Ahi veras eventos, comentarios, subtareas y tiempo registrado de esa actividad.",
+        target: "Fila terminada",
+        selector: ".completed-project-row",
+        result: "Auditas todo lo que paso antes y despues del cierre."
+      }
+    ],
+    checkpoints: ["Proyecto filtrado", "Rango de fechas correcto", "Actividad abierta", "Eventos revisados"]
   },
   management: {
     title: "Tutorial guiado de gerencia",

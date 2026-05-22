@@ -9,7 +9,7 @@ import { auditJson } from "../utils/audit-json.js";
 import { decryptText, encryptText } from "../utils/crypto.js";
 import { getParam } from "../utils/request.js";
 
-const completedTaskActiveWindowDays = 3;
+const completedTaskActiveWindowDays = 1;
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -151,6 +151,45 @@ async function assertMentionedUserBelongsToWorkspace(workspaceId: string, target
   if (!workspaceMembership || workspaceMembership.status !== "ACTIVE") {
     throw new AppError(400, "MENTION_USER_INVALID", "Mentioned user must be an active workspace member.");
   }
+}
+
+async function getInternalProjectMemberUserIds(workspaceId: string, projectId: string) {
+  const internalMembersWithTaskVisibility = await prisma.workspaceMember.findMany({
+    where: {
+      workspaceId,
+      status: "ACTIVE",
+      userType: "INTERNAL",
+      OR: [
+        {
+          user: {
+            projectMembers: {
+              some: {
+                projectId
+              }
+            }
+          }
+        },
+        {
+          role: {
+            permissions: {
+              some: {
+                permission: {
+                  key: {
+                    in: ["workspace.manage", "project.view_all"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    select: {
+      userId: true
+    }
+  });
+
+  return internalMembersWithTaskVisibility.map((member) => member.userId);
 }
 
 export async function listTasks(req: Request, res: Response) {
@@ -452,6 +491,8 @@ export async function createTask(req: Request, res: Response) {
     boardId,
     taskId: task.id,
     actorId: userId,
+    recipientUserIds: assigneeIds,
+    visibility: "project",
     title: req.body.parentTaskId ? "Nueva subtarea" : "Nueva actividad",
     message: req.body.parentTaskId ? `Se creo la subtarea ${task.title}.` : `Se creo la actividad ${task.title}.`
   });
@@ -696,6 +737,8 @@ export async function addTaskAssignee(req: Request, res: Response) {
     boardId: task.boardId,
     taskId: task.id,
     actorId: userId,
+    recipientUserIds: [targetUserId],
+    visibility: "project",
     title: "Asignado agregado",
     message: `Se agrego un asignado a ${task.title}.`
   });
@@ -765,6 +808,8 @@ export async function mentionTaskUser(req: Request, res: Response) {
     boardId: task.boardId,
     taskId: task.id,
     actorId: userId,
+    recipientUserIds: [targetUserId],
+    visibility: "project",
     title: "Usuario mencionado",
     message: `Se menciono a ${mention.user.name} en ${task.title}.`
   });
@@ -901,6 +946,10 @@ export async function createComment(req: Request, res: Response) {
     }
   });
 
+  const internalRecipients = comment.isInternal
+    ? await getInternalProjectMemberUserIds(task.workspaceId, task.projectId)
+    : undefined;
+
   emitRealtimeEvent({
     type: "comment.created",
     workspaceId: task.workspaceId,
@@ -908,6 +957,8 @@ export async function createComment(req: Request, res: Response) {
     boardId: task.boardId,
     taskId: task.id,
     actorId: userId,
+    recipientUserIds: internalRecipients,
+    visibility: comment.isInternal ? "recipients" : "project",
     title: comment.isInternal ? "Comentario interno" : "Nuevo comentario",
     message: `Se agrego un comentario en ${task.title}.`
   });

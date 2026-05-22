@@ -24,6 +24,33 @@ export async function roleHasPermission(roleId: string | undefined, permissionKe
   return count > 0;
 }
 
+async function roleHasAnyPermission(roleId: string | undefined, permissionKeys: PermissionKey[]) {
+  if (!roleId) {
+    return false;
+  }
+
+  const count = await prisma.rolePermission.count({
+    where: {
+      roleId,
+      permission: {
+        key: {
+          in: permissionKeys
+        }
+      }
+    }
+  });
+
+  return count > 0;
+}
+
+function equivalentProjectPermissions(permissionKey: PermissionKey): PermissionKey[] {
+  if (permissionKey === "task.update") {
+    return ["task.update", "task.create"];
+  }
+
+  return [permissionKey];
+}
+
 /**
  * Toda operacion privada empieza aqui: el usuario debe ser miembro ACTIVE del workspace.
  * Suspendidos, removidos e invitados fallan antes de llegar a proyectos o tareas.
@@ -205,8 +232,9 @@ export async function assertProjectPermission(
   permissionKey: PermissionKey
 ) {
   const projectAccess = await assertProjectAccess(userId, projectId);
-  const hasWorkspaceRolePermission = await roleHasPermission(projectAccess.workspaceMember.roleId ?? undefined, permissionKey);
-  const hasProjectRolePermission = await roleHasPermission(projectAccess.projectMember?.roleId ?? undefined, permissionKey);
+  const acceptedPermissions = equivalentProjectPermissions(permissionKey);
+  const hasWorkspaceRolePermission = await roleHasAnyPermission(projectAccess.workspaceMember.roleId ?? undefined, acceptedPermissions);
+  const hasProjectRolePermission = await roleHasAnyPermission(projectAccess.projectMember?.roleId ?? undefined, acceptedPermissions);
 
   if (!hasWorkspaceRolePermission && !hasProjectRolePermission) {
     throw new AppError(403, "PERMISSION_DENIED", `Missing permission: ${permissionKey}.`);

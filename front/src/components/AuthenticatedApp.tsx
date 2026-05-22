@@ -1,4 +1,5 @@
 import { BoardView } from "./BoardView";
+import { CompletedTasksView } from "./CompletedTasksView";
 import { MainLayout } from "./MainLayout";
 import { ManagementView } from "./ManagementView";
 import { MembersView } from "./MembersView";
@@ -20,9 +21,9 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     activeProjectId,
     activeProject,
     activeBoard,
+    completedArchive,
     boardStatuses,
     tasks,
-    completedTasks,
     selectedTaskId,
     selectedTask,
     subtasks,
@@ -36,11 +37,16 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     localities,
     positions,
     staffingRequests,
+    staffingPagination,
+    staffingPages,
+    staffingPageSize,
     summary,
+    reportPeriod,
     currentView,
     boardMode,
     isLoadingProjects,
     isLoadingBoard,
+    isLoadingCompletedArchive,
     isLoadingDetail,
     isLoadingMembers,
     isLoadingManagement,
@@ -81,6 +87,7 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
           activeProjectId={activeProjectId}
           isLoading={isLoadingProjects}
           canCreateProjects={permissions.canCreateProjects}
+          canDeleteProjects={permissions.canDeleteProjects}
           onRefresh={() => void actions.loadProjects()}
           onSelectProject={(projectId) => {
             actions.setActiveProjectId(projectId);
@@ -88,6 +95,7 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
           }}
           onCreateProject={actions.handleCreateProject}
           onUpdateProject={actions.handleUpdateProject}
+          onArchiveProject={actions.handleArchiveProject}
         />
       ) : undefined}
 
@@ -99,7 +107,6 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
               activeProject={activeProject}
               activeBoard={activeBoard}
               tasks={tasks}
-              completedTasks={completedTasks}
               boardMode={boardMode}
               isLoading={isLoadingBoard}
               selectedTaskId={selectedTaskId}
@@ -147,9 +154,50 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
         </>
       ) : undefined}
 
+      {currentView === "completed" ? (
+        <>
+          <CompletedTasksView
+            archive={completedArchive}
+            isLoading={isLoadingCompletedArchive}
+            selectedTaskId={selectedTaskId}
+            onRefresh={() => void actions.loadCompletedArchive()}
+            onOpenTask={actions.handleOpenArchivedTask}
+          />
+          <TaskDetailPanel
+            task={selectedTask}
+            subtasks={subtasks}
+            statuses={boardStatuses}
+            projectMembers={activeProject?.members ?? []}
+            workspaceMembers={members}
+            comments={comments}
+            timeLogs={timeLogs}
+            events={taskEvents}
+            isLoading={isLoadingDetail}
+            currentUserId={session.user.id}
+            canCreateSubtasks={false}
+            canMoveClosedTasks={permissions.canUseManagerPlanning}
+            canViewPlanning={permissions.canUseManagerPlanning}
+            canEditPlanning={false}
+            canModifyCompletedTask={permissions.canModifyCompletedTask}
+            onClose={() => actions.setSelectedTaskId(undefined)}
+            onUpdateTaskPlan={actions.handleUpdateTaskPlan}
+            onCreateSubtask={actions.handleCreateSubtask}
+            onSubtaskStatusChange={actions.handleTaskStatusChange}
+            onCreateSubtaskTimeLog={actions.handleCreateSubtaskTimeLog}
+            onAddTaskAssignee={actions.handleAddTaskAssignee}
+            onMentionTaskUser={actions.handleMentionTaskUser}
+            onCreateComment={actions.handleCreateComment}
+            onCreateTimeLog={actions.handleCreateTimeLog}
+          />
+        </>
+      ) : undefined}
+
       {currentView === "management" ? (
         <ManagementView
           staffingRequests={staffingRequests}
+          staffingPagination={staffingPagination}
+          staffingPages={staffingPages}
+          staffingPageSize={staffingPageSize}
           projects={visibleProjects}
           members={members}
           areas={areas}
@@ -163,6 +211,7 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
           onCreateStaffingRequest={actions.handleCreateStaffingRequest}
           onApproveStaffingRequest={actions.handleApproveStaffingRequest}
           onRejectStaffingRequest={actions.handleRejectStaffingRequest}
+          onPageChange={actions.setStaffingStatusPage}
         />
       ) : undefined}
 
@@ -189,7 +238,9 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
       {currentView === "reports" ? (
         <ReportsView
           summary={summary}
+          period={reportPeriod}
           isLoading={isLoadingReports}
+          onPeriodChange={actions.setReportPeriod}
           onRefresh={() => void actions.loadReports()}
         />
       ) : undefined}

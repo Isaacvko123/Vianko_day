@@ -12,6 +12,7 @@ type RealtimeRefreshPlan = {
   members: boolean;
   management: boolean;
   reports: boolean;
+  completedArchive: boolean;
   projectId?: string;
   taskId?: string;
 };
@@ -23,6 +24,7 @@ type RealtimeRefreshHandlers = {
   members: (options?: SilentLoadOptions) => void;
   management: (options?: SilentLoadOptions) => void;
   reports: (options?: SilentLoadOptions) => void;
+  completedArchive: (options?: SilentLoadOptions) => void;
   projectContext: (projectId: string, options?: SilentLoadOptions) => void;
   taskDetail: (taskId: string, options?: SilentLoadOptions) => void;
 };
@@ -45,7 +47,8 @@ function emptyRealtimeRefreshPlan(): RealtimeRefreshPlan {
     catalog: false,
     members: false,
     management: false,
-    reports: false
+    reports: false,
+    completedArchive: false
   };
 }
 
@@ -71,6 +74,7 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       members: currentPlan.members || nextPlan.members === true,
       management: currentPlan.management || nextPlan.management === true,
       reports: currentPlan.reports || nextPlan.reports === true,
+      completedArchive: currentPlan.completedArchive || nextPlan.completedArchive === true,
       projectId: nextPlan.projectId ?? currentPlan.projectId,
       taskId: nextPlan.taskId ?? currentPlan.taskId
     };
@@ -106,6 +110,10 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       refresh.reports({ silent: true });
     }
 
+    if (plan.completedArchive) {
+      refresh.completedArchive({ silent: true });
+    }
+
     if (plan.projectId) {
       refresh.projectContext(plan.projectId, { silent: true });
     }
@@ -125,6 +133,7 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       members: canLoadManagementData,
       management: canLoadManagementData,
       reports: true,
+      completedArchive: true,
       projectId: activeProjectIdRef.current,
       taskId: selectedTaskIdRef.current
     });

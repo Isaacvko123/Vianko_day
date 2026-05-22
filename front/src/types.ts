@@ -1,4 +1,4 @@
-export type ViewKey = "projects" | "board" | "management" | "members" | "reports";
+export type ViewKey = "projects" | "board" | "completed" | "management" | "members" | "reports";
 export type AuthMode = "login" | "request" | "register";
 export type BoardMode = "kanban" | "list";
 
@@ -8,6 +8,14 @@ export type UserType = "INTERNAL" | "EXTERNAL";
 export type MemberStatus = "INVITED" | "PENDING_APPROVAL" | "ACTIVE" | "SUSPENDED" | "REMOVED";
 export type ProjectVisibility = "WORKSPACE" | "PRIVATE";
 export type StaffingRequestStatus = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+export type ReportPeriodKey = "week" | "month" | "bimester" | "semester" | "year";
+
+export type PaginationMeta = {
+  total: number;
+  limit: number;
+  offset: number;
+  hasMore: boolean;
+};
 export type PermissionKey =
   | "workspace.manage"
   | "workspace.invite_users"
@@ -179,6 +187,8 @@ export type Project = {
   createdById?: string;
   createdAt: string;
   updatedAt: string;
+  archivedAt?: string;
+  deletedAt?: string;
   members?: ProjectMember[];
   boards?: Board[];
   area?: Area;
@@ -379,9 +389,12 @@ export type WorkspaceReportProject = {
   project_id: string;
   project_name: string;
   total_tasks: number;
+  active_tasks: number;
   completed_tasks: number;
   blocked_tasks: number;
   overdue_tasks: number;
+  late_tasks: number;
+  unestimated_tasks: number;
   estimate_minutes?: number;
   actual_minutes?: number;
   progress_percent?: number;
@@ -393,12 +406,42 @@ export type WorkspaceReportUser = {
   assigned_tasks: number;
   active_tasks: number;
   completed_tasks: number;
+  overdue_tasks: number;
+  blocked_tasks: number;
+  late_tasks: number;
+  estimate_minutes: number;
   total_minutes: number;
 };
 
+export type WorkspaceReportActivity = {
+  task_id: string;
+  project_id: string;
+  project_name: string;
+  title: string;
+  description?: string;
+  status_name: string;
+  priority: TaskPriority;
+  start_at?: string;
+  due_at?: string;
+  completed_at?: string;
+  estimate_minutes: number;
+  actual_minutes: number;
+  assignee_names: string;
+  comment_count: number;
+  subtask_count: number;
+  delay_days: number;
+};
+
 export type WorkspaceSummary = {
+  period: {
+    key: ReportPeriodKey;
+    label: string;
+    start: string;
+    end: string;
+  };
   projects: WorkspaceReportProject[];
   users: WorkspaceReportUser[];
+  activities: WorkspaceReportActivity[];
 };
 
 export type ProjectProgress = WorkspaceReportProject & {

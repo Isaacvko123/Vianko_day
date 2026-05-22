@@ -11,7 +11,9 @@ import type {
   Project,
   ProjectMember,
   ProjectProgress,
+  PaginationMeta,
   RegistrationOptions,
+  ReportPeriodKey,
   Role,
   StaffingRequest,
   StaffingRequestStatus,
@@ -163,6 +165,11 @@ export type AddProjectMemberInput = {
 
 export type TaskListView = "active" | "completed";
 
+export type PaginationInput = {
+  limit?: number;
+  offset?: number;
+};
+
 export type RejectStaffingRequestInput = {
   requestId: string;
   responseNote?: string;
@@ -260,10 +267,14 @@ export function listWorkspacePositions(token: string, workspaceId: string) {
   return apiRequest<{ positions: Position[] }>(`/workspaces/${workspaceId}/positions`, { token });
 }
 
-export function listStaffingRequests(token: string, workspaceId: string, status?: StaffingRequestStatus) {
-  const statusQuery = status ? `&status=${encodeURIComponent(status)}` : "";
-  return apiRequest<{ staffingRequests: StaffingRequest[] }>(
-    `/staffing-requests?workspaceId=${encodeURIComponent(workspaceId)}${statusQuery}`,
+export function listStaffingRequests(token: string, workspaceId: string, options: {
+  status?: StaffingRequestStatus;
+} & PaginationInput = {}) {
+  const statusQuery = options.status ? `&status=${encodeURIComponent(options.status)}` : "";
+  const limitQuery = options.limit ? `&limit=${encodeURIComponent(options.limit)}` : "";
+  const offsetQuery = options.offset ? `&offset=${encodeURIComponent(options.offset)}` : "";
+  return apiRequest<{ staffingRequests: StaffingRequest[]; pagination: PaginationMeta }>(
+    `/staffing-requests?workspaceId=${encodeURIComponent(workspaceId)}${statusQuery}${limitQuery}${offsetQuery}`,
     { token }
   );
 }
@@ -311,6 +322,13 @@ export function updateProject(token: string, projectId: string, input: UpdatePro
     token,
     method: "PATCH",
     body: input
+  });
+}
+
+export function archiveProject(token: string, projectId: string) {
+  return apiRequest<{ project: Project }>(`/projects/${projectId}`, {
+    token,
+    method: "DELETE"
   });
 }
 
@@ -456,8 +474,8 @@ export function inviteUser(token: string, input: InviteUserInput) {
   });
 }
 
-export function getWorkspaceSummary(token: string, workspaceId: string) {
-  return apiRequest<WorkspaceSummary>(`/reports/workspace/${workspaceId}/summary`, { token });
+export function getWorkspaceSummary(token: string, workspaceId: string, period: ReportPeriodKey = "month") {
+  return apiRequest<WorkspaceSummary>(`/reports/workspace/${workspaceId}/summary?period=${encodeURIComponent(period)}`, { token });
 }
 
 export function getProjectProgress(token: string, projectId: string) {

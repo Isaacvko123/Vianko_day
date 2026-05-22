@@ -3,6 +3,7 @@ import type { PermissionKey, WorkspaceListItem } from "../types";
 export type WorkspaceCapabilities = {
   canCreateWorkspace: boolean;
   canCreateProjects: boolean;
+  canDeleteProjects: boolean;
   canManageProjectMembers: boolean;
   canCreateTasks: boolean;
   canUseManagerPlanning: boolean;
@@ -33,8 +34,9 @@ export function getWorkspaceCapabilities(workspace?: WorkspaceListItem): Workspa
   const canManageMembers = canManageWorkspace || hasPermission(workspace, "member.manage");
   const canManageProjectMembers = canManageWorkspace || hasPermission(workspace, "project.manage_members");
   const canCreateProjects = canManageWorkspace || hasPermission(workspace, "project.create");
+  const canDeleteProjects = canManageWorkspace || hasPermission(workspace, "project.delete");
   const canCreateTasks = canManageWorkspace || hasPermission(workspace, "task.create");
-  const canUseManagerPlanning = canManageWorkspace || hasPermission(workspace, "project.view_all");
+  const canUseManagerPlanning = canCreateTasks || hasPermission(workspace, "project.view_all");
   const canRequestStaffing = hasPermission(workspace, "project.request_staffing");
   const canRespondStaffing = hasPermission(workspace, "staffing.respond");
   const canViewMembers = canManageMembers || hasPermission(workspace, "workspace.invite_users") || hasPermission(workspace, "area.approve_members");
@@ -45,6 +47,7 @@ export function getWorkspaceCapabilities(workspace?: WorkspaceListItem): Workspa
   return {
     canCreateWorkspace: canManageWorkspace,
     canCreateProjects,
+    canDeleteProjects,
     canManageProjectMembers,
     canCreateTasks,
     canUseManagerPlanning,

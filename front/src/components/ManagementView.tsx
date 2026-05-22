@@ -11,11 +11,16 @@ import {
   X,
   XCircle
 } from "lucide-react";
-import type { Area, Locality, Position, Project, Role, StaffingRequest, WorkspaceMember } from "../types";
+import type { Area, Locality, PaginationMeta, Position, Project, Role, StaffingRequest, StaffingRequestStatus, WorkspaceMember } from "../types";
 import { formatDate } from "../lib/format";
+
+type StaffingPageStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 type ManagementViewProps = {
   staffingRequests: StaffingRequest[];
+  staffingPagination: Partial<Record<StaffingRequestStatus, PaginationMeta>>;
+  staffingPages: Record<StaffingPageStatus, number>;
+  staffingPageSize: number;
   projects: Project[];
   members: WorkspaceMember[];
   areas: Area[];
@@ -45,6 +50,7 @@ type ManagementViewProps = {
     requestId: string;
     responseNote?: string;
   }) => Promise<void>;
+  onPageChange: (status: StaffingPageStatus, page: number) => void;
 };
 
 function readFormString(form: HTMLFormElement, fieldName: string) {
@@ -81,8 +87,29 @@ function memberLabel(member: WorkspaceMember) {
   return `${member.user.name} · ${member.position?.name ?? "Sin puesto"} · ${uniqueLocalityNames.join(", ") || "Sin localidad"}`;
 }
 
+function totalPages(meta?: PaginationMeta) {
+  if (!meta) {
+    return 1;
+  }
+
+  return Math.max(1, Math.ceil(meta.total / meta.limit));
+}
+
+function pageRangeLabel(meta?: PaginationMeta) {
+  if (!meta || meta.total === 0) {
+    return "0 de 0";
+  }
+
+  const firstItem = meta.offset + 1;
+  const lastItem = Math.min(meta.offset + meta.limit, meta.total);
+  return `${firstItem}-${lastItem} de ${meta.total}`;
+}
+
 export function ManagementView({
   staffingRequests,
+  staffingPagination,
+  staffingPages,
+  staffingPageSize,
   projects,
   members,
   areas,
@@ -95,7 +122,8 @@ export function ManagementView({
   onRefresh,
   onCreateStaffingRequest,
   onApproveStaffingRequest,
-  onRejectStaffingRequest
+  onRejectStaffingRequest,
+  onPageChange
 }: ManagementViewProps) {
   const [selectedTargetAreaId, setSelectedTargetAreaId] = useState("");
   const [selectedTargetLocalityId, setSelectedTargetLocalityId] = useState("");
@@ -112,8 +140,11 @@ export function ManagementView({
     [staffingRequests, currentAreaId]
   );
   const pendingRequests = staffingRequests.filter((request) => request.status === "PENDING");
-  const closedRequests = staffingRequests.filter((request) => request.status !== "PENDING");
   const approvedRequests = staffingRequests.filter((request) => request.status === "APPROVED");
+  const rejectedRequests = staffingRequests.filter((request) => request.status === "REJECTED");
+  const pendingTotal = staffingPagination.PENDING?.total ?? pendingRequests.length;
+  const approvedTotal = staffingPagination.APPROVED?.total ?? approvedRequests.length;
+  const rejectedTotal = staffingPagination.REJECTED?.total ?? rejectedRequests.length;
   const targetPositions = selectedTargetAreaId
     ? positions.filter((position) => position.areaId === selectedTargetAreaId)
     : positions;
@@ -155,6 +186,37 @@ export function ManagementView({
 
   function canAnswerRequest(request: StaffingRequest) {
     return canAnswerAllRequests || Boolean(currentAreaId && request.targetAreaId === currentAreaId);
+  }
+
+  function renderPagination(status: StaffingPageStatus) {
+    const meta = staffingPagination[status];
+    const activePage = staffingPages[status];
+    const lastPage = totalPages(meta);
+
+    return (
+      <nav className="staffing-pagination" aria-label={`Paginacion ${statusLabel(status)}`}>
+        <span>{pageRangeLabel(meta)}</span>
+        <div>
+          <button
+            className="secondary-action compact-action"
+            type="button"
+            disabled={activePage <= 1}
+            onClick={() => onPageChange(status, activePage - 1)}
+          >
+            Anterior
+          </button>
+          <strong>{activePage}/{lastPage}</strong>
+          <button
+            className="secondary-action compact-action"
+            type="button"
+            disabled={activePage >= lastPage}
+            onClick={() => onPageChange(status, activePage + 1)}
+          >
+            Siguiente
+          </button>
+        </div>
+      </nav>
+    );
   }
 
   async function handleCreate(event: FormEvent<HTMLFormElement>) {
@@ -260,12 +322,17 @@ export function ManagementView({
         <article>
           <span><Clock3 size={18} /></span>
           <small>Pendientes</small>
-          <strong>{pendingRequests.length}</strong>
+          <strong>{pendingTotal}</strong>
         </article>
         <article>
           <span><ClipboardCheck size={18} /></span>
           <small>Aprobadas</small>
-          <strong>{approvedRequests.length}</strong>
+          <strong>{approvedTotal}</strong>
+        </article>
+        <article>
+          <span><XCircle size={18} /></span>
+          <small>Rechazadas</small>
+          <strong>{rejectedTotal}</strong>
         </article>
       </section>
 
@@ -290,8 +357,9 @@ export function ManagementView({
             <h2><ArrowDownToLine size={18} /> Pendientes por responder</h2>
             <p>Solicitudes abiertas, ligadas siempre a un proyecto concreto.</p>
           </div>
-          <span>{pendingRequests.length}</span>
+          <span>{pendingTotal}</span>
         </header>
+        {renderPagination("PENDING")}
         {isLoading ? <div className="empty-state">Cargando solicitudes...</div> : undefined}
         {!isLoading && pendingRequests.length === 0 ? <div className="empty-state">No hay solicitudes pendientes.</div> : undefined}
         {pendingRequests.length > 0 ? (
@@ -358,18 +426,20 @@ export function ManagementView({
             })}
           </div>
         ) : undefined}
+        {pendingRequests.length > 0 ? renderPagination("PENDING") : undefined}
       </section>
 
       <section className="staffing-table-card" data-guide="management-outgoing">
         <header>
           <div>
-            <h2><ClipboardCheck size={18} /> Historial aprobado y rechazado</h2>
-            <p>Decisiones cerradas con personas asignadas o motivo de rechazo.</p>
+            <h2><ClipboardCheck size={18} /> Aprobadas</h2>
+            <p>Solicitudes cerradas con personas asignadas al proyecto.</p>
           </div>
-          <span>{closedRequests.length}</span>
+          <span>{approvedTotal}</span>
         </header>
-        {closedRequests.length === 0 ? <div className="empty-state">Aun no hay solicitudes cerradas.</div> : undefined}
-        {closedRequests.length > 0 ? (
+        {renderPagination("APPROVED")}
+        {approvedRequests.length === 0 ? <div className="empty-state">Aun no hay solicitudes aprobadas.</div> : undefined}
+        {approvedRequests.length > 0 ? (
           <div className="staffing-table staffing-table-history" role="table" aria-label="Historial de solicitudes">
             <div className="staffing-table-head" role="row">
               <span>Proyecto</span>
@@ -378,7 +448,7 @@ export function ManagementView({
               <span>Respondio</span>
               <span>Motivo o nota</span>
             </div>
-            {closedRequests.map((request) => (
+            {approvedRequests.map((request) => (
               <article className="staffing-table-row" role="row" key={request.id}>
                 <div>
                   <strong>{request.project.name}</strong>
@@ -401,6 +471,52 @@ export function ManagementView({
             ))}
           </div>
         ) : undefined}
+        {approvedRequests.length > 0 ? renderPagination("APPROVED") : undefined}
+      </section>
+
+      <section className="staffing-table-card" data-guide="management-rejected">
+        <header>
+          <div>
+            <h2><XCircle size={18} /> Rechazadas</h2>
+            <p>Solicitudes no aprobadas con motivo obligatorio para seguimiento.</p>
+          </div>
+          <span>{rejectedTotal}</span>
+        </header>
+        {renderPagination("REJECTED")}
+        {rejectedRequests.length === 0 ? <div className="empty-state">No hay solicitudes rechazadas.</div> : undefined}
+        {rejectedRequests.length > 0 ? (
+          <div className="staffing-table staffing-table-history" role="table" aria-label="Solicitudes rechazadas">
+            <div className="staffing-table-head" role="row">
+              <span>Proyecto</span>
+              <span>Resultado</span>
+              <span>Personal</span>
+              <span>Respondio</span>
+              <span>Motivo</span>
+            </div>
+            {rejectedRequests.map((request) => (
+              <article className="staffing-table-row" role="row" key={request.id}>
+                <div>
+                  <strong>{request.project.name}</strong>
+                  <small>{requestTargetLabel(request)}</small>
+                </div>
+                <div>
+                  <em className={`status-pill status-${request.status.toLowerCase()}`}>{statusLabel(request.status)}</em>
+                  <small>{request.respondedAt ? formatDate(request.respondedAt) : "Sin fecha de cierre"}</small>
+                </div>
+                <div>
+                  <strong>{requestAssignmentsLabel(request)}</strong>
+                  <small>{request.quantity} solicitado{request.quantity === 1 ? "" : "s"}</small>
+                </div>
+                <div>
+                  <strong>{request.responder?.name ?? "Sin responsable"}</strong>
+                  <small>{request.targetArea.name}</small>
+                </div>
+                <p>{request.responseNote || "Sin motivo registrado."}</p>
+              </article>
+            ))}
+          </div>
+        ) : undefined}
+        {rejectedRequests.length > 0 ? renderPagination("REJECTED") : undefined}
       </section>
 
       {isRequestModalOpen ? (

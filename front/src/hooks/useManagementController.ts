@@ -8,7 +8,7 @@ import {
   rejectStaffingRequest
 } from "../api/endpoints";
 import { queryKeys } from "../lib/queryKeys";
-import type { StaffingRequest } from "../types";
+import type { PaginationMeta, StaffingRequest, StaffingRequestStatus } from "../types";
 
 type LoadOptions = {
   silent?: boolean;
@@ -24,17 +24,53 @@ type UseManagementControllerOptions = {
 export function useManagementController({ token, workspaceId, enabled, onError }: UseManagementControllerOptions) {
   const queryClient = useQueryClient();
   const [staffingRequests, setStaffingRequests] = useState<StaffingRequest[]>([]);
+  const [staffingPagination, setStaffingPagination] = useState<Partial<Record<StaffingRequestStatus, PaginationMeta>>>({});
+  const [staffingPages, setStaffingPages] = useState<Record<"PENDING" | "APPROVED" | "REJECTED", number>>({
+    PENDING: 1,
+    APPROVED: 1,
+    REJECTED: 1
+  });
+  const staffingPageSize = 8;
 
   async function fetchManagement() {
     if (!token || !workspaceId) {
       throw new Error("Workspace no disponible.");
     }
 
-    return listStaffingRequests(token, workspaceId);
+    const [pendingResponse, approvedResponse, rejectedResponse] = await Promise.all([
+      listStaffingRequests(token, workspaceId, {
+        status: "PENDING",
+        limit: staffingPageSize,
+        offset: (staffingPages.PENDING - 1) * staffingPageSize
+      }),
+      listStaffingRequests(token, workspaceId, {
+        status: "APPROVED",
+        limit: staffingPageSize,
+        offset: (staffingPages.APPROVED - 1) * staffingPageSize
+      }),
+      listStaffingRequests(token, workspaceId, {
+        status: "REJECTED",
+        limit: staffingPageSize,
+        offset: (staffingPages.REJECTED - 1) * staffingPageSize
+      })
+    ]);
+
+    return {
+      staffingRequests: [
+        ...pendingResponse.staffingRequests,
+        ...approvedResponse.staffingRequests,
+        ...rejectedResponse.staffingRequests
+      ],
+      pagination: {
+        PENDING: pendingResponse.pagination,
+        APPROVED: approvedResponse.pagination,
+        REJECTED: rejectedResponse.pagination
+      }
+    };
   }
 
   const managementQuery = useQuery({
-    queryKey: queryKeys.management(workspaceId),
+    queryKey: queryKeys.management(workspaceId, staffingPages),
     queryFn: fetchManagement,
     enabled: Boolean(token && workspaceId && enabled)
   });
@@ -46,11 +82,12 @@ export function useManagementController({ token, workspaceId, enabled, onError }
 
     try {
       const staffingResponse = await queryClient.fetchQuery({
-        queryKey: queryKeys.management(workspaceId),
+        queryKey: queryKeys.management(workspaceId, staffingPages),
         queryFn: fetchManagement,
         staleTime: 0
       });
       setStaffingRequests(staffingResponse.staffingRequests);
+      setStaffingPagination(staffingResponse.pagination);
     } catch (error) {
       if (!options.silent) {
         onError(error instanceof Error ? error.message : "No se pudo cargar gerencia.");
@@ -74,7 +111,11 @@ export function useManagementController({ token, workspaceId, enabled, onError }
 
     const response = await createStaffingRequest(token, input);
     void queryClient.invalidateQueries({ queryKey: queryKeys.management(workspaceId) });
-    setStaffingRequests((currentRequests) => [response.staffingRequest, ...currentRequests]);
+    setStaffingPages((currentPages) => ({ ...currentPages, PENDING: 1 }));
+    setStaffingRequests((currentRequests) => [
+      response.staffingRequest,
+      ...currentRequests.filter((request) => request.id !== response.staffingRequest.id)
+    ]);
   }
 
   async function handleApproveStaffingRequest(input: {
@@ -88,6 +129,7 @@ export function useManagementController({ token, workspaceId, enabled, onError }
 
     const response = await approveStaffingRequest(token, input);
     void queryClient.invalidateQueries({ queryKey: queryKeys.management(workspaceId) });
+    setStaffingPages((currentPages) => ({ ...currentPages, APPROVED: 1 }));
     setStaffingRequests((currentRequests) =>
       currentRequests.map((request) => request.id === response.staffingRequest.id ? response.staffingRequest : request)
     );
@@ -103,18 +145,33 @@ export function useManagementController({ token, workspaceId, enabled, onError }
 
     const response = await rejectStaffingRequest(token, input);
     void queryClient.invalidateQueries({ queryKey: queryKeys.management(workspaceId) });
+    setStaffingPages((currentPages) => ({ ...currentPages, REJECTED: 1 }));
     setStaffingRequests((currentRequests) =>
       currentRequests.map((request) => request.id === response.staffingRequest.id ? response.staffingRequest : request)
     );
   }
 
+  function setStaffingStatusPage(status: "PENDING" | "APPROVED" | "REJECTED", page: number) {
+    setStaffingPages((currentPages) => ({
+      ...currentPages,
+      [status]: Math.max(1, page)
+    }));
+  }
+
   function resetManagementState() {
     setStaffingRequests([]);
+    setStaffingPagination({});
+    setStaffingPages({
+      PENDING: 1,
+      APPROVED: 1,
+      REJECTED: 1
+    });
   }
 
   useEffect(() => {
     if (managementQuery.data) {
       setStaffingRequests(managementQuery.data.staffingRequests);
+      setStaffingPagination(managementQuery.data.pagination);
     }
   }, [managementQuery.dataUpdatedAt]);
 
@@ -126,12 +183,16 @@ export function useManagementController({ token, workspaceId, enabled, onError }
 
   return {
     staffingRequests,
+    staffingPagination,
+    staffingPages,
+    staffingPageSize,
     isLoadingManagement: managementQuery.isFetching,
     actions: {
       loadManagement,
       handleCreateStaffingRequest,
       handleApproveStaffingRequest,
       handleRejectStaffingRequest,
+      setStaffingStatusPage,
       resetManagementState
     }
   };

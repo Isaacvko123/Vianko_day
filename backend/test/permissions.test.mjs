@@ -37,12 +37,22 @@ test("manager, technical lead and developer boundaries stay intentional", () => 
 
   assert.ok(manager.has("project.view_all"), "Gerente debe ver todos los proyectos.");
   assert.ok(manager.has("staffing.respond"), "Gerente debe responder solicitudes de personal.");
+  assert.equal(manager.has("project.delete"), false, "Gerente no debe archivar proyectos completos.");
   assert.ok(technicalLead.has("project.create"), "Lider TI debe crear proyectos propios.");
   assert.equal(technicalLead.has("project.view_all"), false, "Lider TI no debe ver todo el workspace.");
   assert.deepEqual(coordinator, technicalLead, "Coordinador debe conservar el mismo alcance que Lider TI.");
   assert.equal(developer.has("task.create"), false, "Developer no debe crear tareas.");
   assert.ok(developer.has("task.change_status"), "Developer debe mover estados de tareas asignadas.");
   assert.ok(developer.has("task.log_time"), "Developer debe registrar tiempo.");
+});
+
+test("task creators can also edit tasks", () => {
+  for (const role of ROLE_DEFINITIONS) {
+    const permissions = new Set(role.permissions);
+    if (permissions.has("task.create")) {
+      assert.ok(permissions.has("task.update"), `${role.name} puede crear tareas y tambien debe editarlas.`);
+    }
+  }
 });
 
 test("default board has exactly one done status and one default entry point", () => {
