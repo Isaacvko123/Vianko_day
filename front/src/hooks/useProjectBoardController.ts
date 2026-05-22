@@ -221,19 +221,22 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
 
       return listProjects(token, workspaceId);
     },
-    enabled: Boolean(token && workspaceId)
+    enabled: Boolean(token && workspaceId),
+    refetchOnMount: "always"
   });
 
   const projectContextQuery = useQuery({
     queryKey: queryKeys.projectContext(activeProjectId),
     queryFn: () => fetchProjectContext(activeProjectId!),
-    enabled: Boolean(token && activeProjectId)
+    enabled: Boolean(token && activeProjectId),
+    refetchOnMount: "always"
   });
 
   const taskDetailQuery = useQuery({
     queryKey: queryKeys.taskDetail(selectedTaskId),
     queryFn: () => fetchTaskDetail(selectedTaskId!),
-    enabled: Boolean(token && selectedTaskId)
+    enabled: Boolean(token && selectedTaskId),
+    refetchOnMount: "always"
   });
 
   const completedArchiveQuery = useQuery({
@@ -701,7 +704,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     if (projectsQuery.data) {
       applyProjects(projectsQuery.data.projects);
     }
-  }, [projectsQuery.dataUpdatedAt]);
+  }, [projectsQuery.data, projectsQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (projectsQuery.error) {
@@ -713,7 +716,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     if (projectContextQuery.data) {
       applyProjectContext(projectContextQuery.data);
     }
-  }, [projectContextQuery.dataUpdatedAt]);
+  }, [projectContextQuery.data, projectContextQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (projectContextQuery.error) {
@@ -725,7 +728,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     if (taskDetailQuery.data) {
       applyTaskDetail(taskDetailQuery.data);
     }
-  }, [taskDetailQuery.dataUpdatedAt]);
+  }, [taskDetailQuery.data, taskDetailQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (taskDetailQuery.error) {
@@ -737,7 +740,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     if (completedArchiveQuery.data) {
       setCompletedArchive(completedArchiveQuery.data);
     }
-  }, [completedArchiveQuery.dataUpdatedAt]);
+  }, [completedArchiveQuery.data, completedArchiveQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (!selectedTaskId) {
@@ -758,9 +761,9 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       setCompletedTasks([]);
       setSelectedTaskId(undefined);
     } else {
-      void queryClient.invalidateQueries({ queryKey: queryKeys.projectContext(activeProjectId) });
+      void loadProjectContext(activeProjectId, { silent: true });
     }
-  }, [activeProjectId, queryClient]);
+  }, [activeProjectId, token, queryClient]);
 
   return {
     projects,

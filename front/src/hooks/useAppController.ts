@@ -10,13 +10,16 @@ import {
   type CreateWorkspaceInput,
   type UpdateProjectInput
 } from "../api/endpoints";
+import { authSessionExpiredEventName, type AuthSessionExpiredDetail } from "../api/http";
 import { getWorkspaceCapabilities } from "../lib/permissions";
 import { queryKeys } from "../lib/queryKeys";
 import {
   clearStoredSession,
   clearStoredWorkspace,
+  getSessionAccessTokenExpiresAt,
   readStoredSession,
   readStoredWorkspace,
+  shouldRefreshSessionAccessToken,
   storeSession,
   storeWorkspace
 } from "../lib/storage";
@@ -77,10 +80,11 @@ export function useAppController() {
   const [globalError, setGlobalError] = useState("");
   const queryClient = useQueryClient();
 
-  const token = session?.tokens.accessToken;
   const workspaceId = selectedWorkspace?.id;
   const currentView = useMemo(() => pathToView(location.pathname) ?? "projects", [location.pathname]);
   const permissions = useMemo(() => getWorkspaceCapabilities(selectedWorkspace), [selectedWorkspace]);
+  const sessionNeedsRefresh = shouldRefreshSessionAccessToken(session);
+  const token = sessionNeedsRefresh ? undefined : session?.tokens.accessToken;
 
   const {
     notifications,
@@ -147,13 +151,17 @@ export function useAppController() {
 
       return listWorkspaces(session.tokens.accessToken);
     },
-    enabled: Boolean(session)
+    enabled: Boolean(session && !sessionNeedsRefresh)
   });
 
   async function loadWorkspaces(nextSession?: AuthSession) {
     const sessionForRequest = nextSession ?? session;
 
     if (!sessionForRequest) {
+      return;
+    }
+
+    if (shouldRefreshSessionAccessToken(sessionForRequest, 5_000)) {
       return;
     }
 
@@ -172,17 +180,57 @@ export function useAppController() {
   }
 
   useEffect(() => {
-    if (session) {
-      void loadWorkspaces(session);
-    }
-  }, [session?.tokens.accessToken]);
-
-  useEffect(() => {
     if (!session) {
       return undefined;
     }
 
-    const refreshDelayMs = Math.max(30_000, session.tokens.expiresIn * 1000 - 60_000);
+    const currentSession = session;
+    let isCancelled = false;
+
+    async function bootstrapSession() {
+      let sessionForRequest = currentSession;
+
+      if (shouldRefreshSessionAccessToken(currentSession)) {
+        try {
+          const response = await refreshSession(currentSession.tokens.refreshToken);
+
+          if (isCancelled) {
+            return;
+          }
+
+          sessionForRequest = storeSession({
+            ...currentSession,
+            tokens: response.tokens
+          });
+          setSession(sessionForRequest);
+          void queryClient.invalidateQueries();
+        } catch {
+          if (!isCancelled) {
+            handleLogout();
+          }
+          return;
+        }
+      }
+
+      if (!isCancelled) {
+        void loadWorkspaces(sessionForRequest);
+      }
+    }
+
+    void bootstrapSession();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [session?.tokens.accessToken, session?.tokens.refreshToken, session?.tokens.expiresAt, queryClient]);
+
+  useEffect(() => {
+    if (!session || shouldRefreshSessionAccessToken(session)) {
+      return undefined;
+    }
+
+    const refreshLeadMs = Math.min(60_000, Math.max(10_000, session.tokens.expiresIn * 1000 * 0.2));
+    const refreshDelayMs = Math.max(1_000, getSessionAccessTokenExpiresAt(session) - Date.now() - refreshLeadMs);
     let isCancelled = false;
 
     const refreshTimer = window.setTimeout(() => {
@@ -192,13 +240,12 @@ export function useAppController() {
             return;
           }
 
-          const refreshedSession = {
+          const refreshedSession = storeSession({
             ...session,
             tokens: response.tokens
-          };
+          });
 
           setSession(refreshedSession);
-          storeSession(refreshedSession);
           void queryClient.invalidateQueries();
         })
         .catch(() => {
@@ -218,7 +265,7 @@ export function useAppController() {
     if (workspacesQuery.data) {
       applyWorkspaces(workspacesQuery.data.workspaces);
     }
-  }, [workspacesQuery.dataUpdatedAt]);
+  }, [workspacesQuery.data, workspacesQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (workspacesQuery.error) {
@@ -227,34 +274,68 @@ export function useAppController() {
   }, [workspacesQuery.error]);
 
   useEffect(() => {
+    function handleExpiredSession(event: Event) {
+      const detail = event instanceof CustomEvent
+        ? event.detail as AuthSessionExpiredDetail | undefined
+        : undefined;
+      const message = detail?.code === "REFRESH_REUSED"
+        ? "Tu sesion se cerro por seguridad. Detectamos reutilizacion del token."
+        : "Tu sesion expiro o ya no es valida. Inicia sesion otra vez.";
+
+      setGlobalError(message);
+      handleLogout();
+    }
+
+    window.addEventListener(authSessionExpiredEventName, handleExpiredSession);
+
+    return () => {
+      window.removeEventListener(authSessionExpiredEventName, handleExpiredSession);
+    };
+  }, [session?.tokens.refreshToken]);
+
+  useEffect(() => {
     if (token && workspaceId) {
-      void projectBoard.actions.loadProjects();
-      void people.actions.loadWorkspaceCatalog();
+      void projectBoard.actions.loadProjects({ silent: true });
+      void people.actions.loadWorkspaceCatalog({ silent: true });
     }
   }, [token, workspaceId, permissions.canLoadManagementData]);
 
   useEffect(() => {
+    if (currentView === "board" && token && workspaceId && projectBoard.activeProjectId) {
+      void projectBoard.actions.loadProjectContext(projectBoard.activeProjectId, { silent: true });
+    }
+  }, [currentView, token, workspaceId, projectBoard.activeProjectId]);
+
+  useEffect(() => {
     if (currentView === "members") {
-      void people.actions.loadMembers();
+      void people.actions.loadMembers({ silent: true });
     }
 
     if (currentView === "management") {
-      void management.actions.loadManagement();
-      void people.actions.loadMembers();
+      void management.actions.loadManagement({ silent: true });
+      void people.actions.loadMembers({ silent: true });
     }
 
     if (currentView === "reports") {
-      void reports.actions.loadReports();
+      void reports.actions.loadReports({ silent: true });
     }
 
     if (currentView === "completed") {
-      void projectBoard.actions.loadCompletedArchive();
+      void projectBoard.actions.loadCompletedArchive({ silent: true });
     }
-  }, [currentView, token, workspaceId]);
+  }, [
+    currentView,
+    token,
+    workspaceId,
+    reports.reportPeriod,
+    management.staffingPages.PENDING,
+    management.staffingPages.APPROVED,
+    management.staffingPages.REJECTED
+  ]);
 
   function handleAuthenticated(nextSession: AuthSession) {
-    setSession(nextSession);
-    storeSession(nextSession);
+    const storedSession = storeSession(nextSession);
+    setSession(storedSession);
     navigate("/workspaces", { replace: true });
   }
 
@@ -374,6 +455,12 @@ export function useAppController() {
     onError: (error) => {
       if (error.code === "RATE_LIMITED") {
         setGlobalError("Tiempo real desactivado por demasiados cambios de sala. Recarga la vista para reconectar.");
+        return;
+      }
+
+      if (error.code === "AUTH_INVALID") {
+        setGlobalError("Tu sesion de tiempo real ya no es valida. Inicia sesion otra vez.");
+        handleLogout();
         return;
       }
 

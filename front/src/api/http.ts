@@ -12,6 +12,14 @@ function enforceProductionApiTransport(apiUrl: string) {
 }
 
 export const apiBaseUrl = enforceProductionApiTransport(configuredApiUrl);
+export const authSessionExpiredEventName = "vianko-day:auth-session-expired";
+
+export type AuthSessionExpiredDetail = {
+  status: number;
+  code: string;
+  message: string;
+  path: string;
+};
 
 export class ApiError extends Error {
   readonly status: number;
@@ -29,6 +37,26 @@ export type ApiRequestOptions = {
   method?: "GET" | "POST" | "PATCH" | "DELETE";
   body?: Record<string, unknown>;
 };
+
+function shouldNotifyExpiredSession(path: string, options: ApiRequestOptions, status: number, code: string) {
+  if (status !== 401) {
+    return false;
+  }
+
+  if (path === "/auth/refresh" && (code === "REFRESH_INVALID" || code === "REFRESH_REUSED")) {
+    return true;
+  }
+
+  return Boolean(options.token) && (code === "AUTH_INVALID" || code === "AUTH_REQUIRED");
+}
+
+function notifyExpiredSession(detail: AuthSessionExpiredDetail) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent<AuthSessionExpiredDetail>(authSessionExpiredEventName, { detail }));
+}
 
 function normalizeServerValues(value: unknown): unknown {
   if (value == undefined) {
@@ -105,14 +133,25 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
   const payload = await parseJsonResponse<T & ApiErrorBody>(response);
 
   if (!response.ok) {
+    const errorCode = payload.error?.code ?? "API_ERROR";
     const fallbackMessage = response.status >= 500
       ? "La API no esta respondiendo correctamente. Revisa que el backend este activo."
       : "No se pudo completar la solicitud.";
+    const errorMessage = payload.error?.message ?? fallbackMessage;
+
+    if (shouldNotifyExpiredSession(path, options, response.status, errorCode)) {
+      notifyExpiredSession({
+        status: response.status,
+        code: errorCode,
+        message: errorMessage,
+        path
+      });
+    }
 
     throw new ApiError(
       response.status,
-      payload.error?.code ?? "API_ERROR",
-      payload.error?.message ?? fallbackMessage
+      errorCode,
+      errorMessage
     );
   }
 

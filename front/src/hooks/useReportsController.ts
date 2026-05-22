@@ -32,7 +32,8 @@ export function useReportsController({ token, workspaceId, enabled, onError }: U
   const reportsQuery = useQuery({
     queryKey: queryKeys.reports(workspaceId, reportPeriod),
     queryFn: fetchReports,
-    enabled: Boolean(token && workspaceId && enabled)
+    enabled: Boolean(token && workspaceId && enabled),
+    refetchOnMount: "always"
   });
 
   async function loadReports(options: LoadOptions = {}) {
@@ -61,7 +62,7 @@ export function useReportsController({ token, workspaceId, enabled, onError }: U
     if (reportsQuery.data) {
       setSummary(reportsQuery.data);
     }
-  }, [reportsQuery.dataUpdatedAt]);
+  }, [reportsQuery.data, reportsQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (reportsQuery.error) {

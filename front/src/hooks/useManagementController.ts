@@ -72,7 +72,8 @@ export function useManagementController({ token, workspaceId, enabled, onError }
   const managementQuery = useQuery({
     queryKey: queryKeys.management(workspaceId, staffingPages),
     queryFn: fetchManagement,
-    enabled: Boolean(token && workspaceId && enabled)
+    enabled: Boolean(token && workspaceId && enabled),
+    refetchOnMount: "always"
   });
 
   async function loadManagement(options: LoadOptions = {}) {
@@ -173,7 +174,7 @@ export function useManagementController({ token, workspaceId, enabled, onError }
       setStaffingRequests(managementQuery.data.staffingRequests);
       setStaffingPagination(managementQuery.data.pagination);
     }
-  }, [managementQuery.dataUpdatedAt]);
+  }, [managementQuery.data, managementQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (managementQuery.error) {

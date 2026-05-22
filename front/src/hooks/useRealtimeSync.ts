@@ -217,6 +217,15 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       queueRealtimeRefresh(event);
     });
     socket.on("realtime:error", (error) => latestOptionsRef.current.onError(error));
+    socket.on("connect_error", (error) => {
+      if (error.message === "AUTH_INVALID") {
+        latestOptionsRef.current.onError({
+          code: "AUTH_INVALID",
+          message: "Sesion de tiempo real invalida.",
+          createdAt: new Date().toISOString()
+        });
+      }
+    });
 
     return () => {
       if (joinedTaskIdRef.current) {

@@ -110,13 +110,15 @@ export function useWorkspacePeopleController({
   const catalogQuery = useQuery({
     queryKey: queryKeys.catalog(workspaceId),
     queryFn: fetchCatalog,
-    enabled: Boolean(token && workspaceId)
+    enabled: Boolean(token && workspaceId),
+    refetchOnMount: "always"
   });
 
   const membersQuery = useQuery({
     queryKey: queryKeys.members(workspaceId),
     queryFn: fetchMembers,
-    enabled: Boolean(token && workspaceId && canLoadMemberDirectory)
+    enabled: Boolean(token && workspaceId && canLoadMemberDirectory),
+    refetchOnMount: "always"
   });
 
   async function loadMembers(options: LoadOptions = {}) {
@@ -298,13 +300,13 @@ export function useWorkspacePeopleController({
     if (catalogQuery.data) {
       applyCatalog(catalogQuery.data);
     }
-  }, [catalogQuery.dataUpdatedAt]);
+  }, [catalogQuery.data, catalogQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (membersQuery.data) {
       applyMembers(membersQuery.data);
     }
-  }, [membersQuery.dataUpdatedAt]);
+  }, [membersQuery.data, membersQuery.dataUpdatedAt]);
 
   useEffect(() => {
     if (catalogQuery.error) {
