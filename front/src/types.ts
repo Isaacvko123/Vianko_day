@@ -1,5 +1,5 @@
 export type ViewKey = "projects" | "board" | "completed" | "management" | "members" | "reports";
-export type AuthMode = "login" | "request" | "register";
+export type AuthMode = "login" | "request";
 export type BoardMode = "kanban" | "list";
 
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH" | "URGENT";
@@ -344,6 +344,8 @@ export type RegistrationOptions = {
   localities: Locality[];
   positions: Position[];
 };
+
+export type RegistrationWorkspace = RegistrationOptions["workspace"];
 
 export type StaffingAssignment = {
   id: string;

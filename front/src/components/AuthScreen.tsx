@@ -1,8 +1,8 @@
-import { FormEvent, useState } from "react";
-import { CheckCircle2, ClipboardCheck, Eye, EyeOff, HelpCircle, LockKeyhole, LogIn, Search, Sparkles, X } from "lucide-react";
+import { FormEvent, useEffect, useState } from "react";
+import { CheckCircle2, ClipboardCheck, Eye, EyeOff, HelpCircle, LogIn, Sparkles, X } from "lucide-react";
 import { Button } from "./ui";
-import type { AuthMode, AuthSession, RegistrationOptions } from "../types";
-import { getRegistrationOptions, login, register, requestAccess } from "../api/endpoints";
+import type { AuthMode, AuthSession, RegistrationOptions, RegistrationWorkspace } from "../types";
+import { getRegistrationOptions, listRegistrationWorkspaces, login, requestAccess } from "../api/endpoints";
 
 type AuthScreenProps = {
   onAuthenticated: (session: AuthSession) => void;
@@ -15,7 +15,9 @@ function readFormString(form: HTMLFormElement, fieldName: string) {
 
 export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [mode, setMode] = useState<AuthMode>("login");
+  const [requestWorkspaces, setRequestWorkspaces] = useState<RegistrationWorkspace[]>([]);
   const [registrationOptions, setRegistrationOptions] = useState<RegistrationOptions>();
+  const [selectedWorkspaceSlug, setSelectedWorkspaceSlug] = useState("");
   const [selectedAreaId, setSelectedAreaId] = useState("");
   const [selectedLocalityId, setSelectedLocalityId] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
@@ -54,6 +56,36 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
     }
   }
 
+  async function loadRequestWorkspaces() {
+    setIsLoadingOptions(true);
+    setErrorMessage("");
+
+    try {
+      const response = await listRegistrationWorkspaces();
+      const firstWorkspaceSlug = response.workspaces[0]?.slug ?? "";
+
+      setRequestWorkspaces(response.workspaces);
+      setSelectedWorkspaceSlug(firstWorkspaceSlug);
+
+      if (firstWorkspaceSlug) {
+        await loadRequestOptions(firstWorkspaceSlug);
+      } else {
+        setRegistrationOptions(undefined);
+        setSelectedAreaId("");
+        setSelectedLocalityId("");
+      }
+    } catch (error) {
+      setRequestWorkspaces([]);
+      setRegistrationOptions(undefined);
+      setSelectedWorkspaceSlug("");
+      setSelectedAreaId("");
+      setSelectedLocalityId("");
+      setErrorMessage(error instanceof Error ? error.message : "No se pudieron cargar los workspaces.");
+    } finally {
+      setIsLoadingOptions(false);
+    }
+  }
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setErrorMessage("");
@@ -74,7 +106,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         }
 
         await requestAccess({
-          workspaceSlug: readFormString(form, "workspaceSlug"),
+          workspaceSlug: selectedWorkspaceSlug,
           name: readFormString(form, "name"),
           email,
           password,
@@ -89,14 +121,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
         return;
       }
 
-      const session = mode === "login"
-        ? await login({ email, password })
-        : await register({
-          name: readFormString(form, "name"),
-          email,
-          password,
-          workspaceName: readFormString(form, "workspaceName")
-        });
+      const session = await login({ email, password });
 
       onAuthenticated(session);
     } catch (error) {
@@ -105,6 +130,12 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       setIsSubmitting(false);
     }
   }
+
+  useEffect(() => {
+    if (mode === "request" && requestWorkspaces.length === 0) {
+      void loadRequestWorkspaces();
+    }
+  }, [mode]);
 
   return (
     <main className="auth-shell">
@@ -139,8 +170,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             </header>
             <ol>
               <li><strong>Login:</strong> usalo si tu cuenta ya fue aprobada.</li>
-              <li><strong>Solicitud:</strong> busca el workspace, elige area, localidad y puesto; despues espera aprobacion.</li>
-              <li><strong>Registro:</strong> usalo solo para crear un workspace nuevo.</li>
+              <li><strong>Solicitud:</strong> elige el workspace disponible, area, localidad y puesto; despues espera aprobacion.</li>
+              <li><strong>Alta de workspace:</strong> solo la hace un admin dentro de la plataforma.</li>
             </ol>
           </section>
         ) : undefined}
@@ -151,9 +182,6 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           <button className={mode === "request" ? "active" : ""} type="button" onClick={() => changeMode("request")}>
             Solicitud
           </button>
-          <button className={mode === "register" ? "active" : ""} type="button" onClick={() => changeMode("register")}>
-            Registro
-          </button>
         </div>
 
         <form className="form-stack" onSubmit={handleSubmit} autoComplete="off">
@@ -161,23 +189,22 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             <>
               <label>
                 Workspace
-                <div className="inline-control">
-                  <input name="workspaceSlug" minLength={2} required defaultValue="vianko" />
-                  <button
-                    className="secondary-action"
-                    type="button"
-                    disabled={isLoadingOptions}
-                    onClick={(event) => {
-                      const form = event.currentTarget.form;
-                      if (form) {
-                        void loadRequestOptions(readFormString(form, "workspaceSlug"));
-                      }
-                    }}
-                  >
-                    <Search size={17} />
-                    {isLoadingOptions ? "Buscando..." : "Buscar"}
-                  </button>
-                </div>
+                <select
+                  name="workspaceSlug"
+                  required
+                  value={selectedWorkspaceSlug}
+                  disabled={isLoadingOptions || requestWorkspaces.length === 0}
+                  onChange={(event) => {
+                    const nextWorkspaceSlug = event.currentTarget.value;
+                    setSelectedWorkspaceSlug(nextWorkspaceSlug);
+                    void loadRequestOptions(nextWorkspaceSlug);
+                  }}
+                >
+                  <option value="">{isLoadingOptions ? "Cargando workspaces..." : "Seleccionar workspace"}</option>
+                  {requestWorkspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.slug}>{workspace.name}</option>
+                  ))}
+                </select>
               </label>
               <label>
                 Nombre
@@ -235,19 +262,6 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
             </>
           ) : undefined}
 
-          {mode === "register" ? (
-            <>
-              <label>
-                Nombre
-                <input name="name" minLength={2} required placeholder="Nombre Apellido" autoComplete="off" />
-              </label>
-              <label>
-                Empresa / workspace
-                <input name="workspaceName" minLength={2} required placeholder="Vianko" />
-              </label>
-            </>
-          ) : undefined}
-
           <label>
             Correo
             <input name="email" type="email" required placeholder="nombre@example.com" autoComplete="off" />
@@ -278,12 +292,12 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           {successMessage ? <p className="form-success">{successMessage}</p> : undefined}
 
           <Button
-            icon={mode === "login" ? <LogIn size={18} /> : mode === "request" ? <ClipboardCheck size={18} /> : <LockKeyhole size={18} />}
+            icon={mode === "login" ? <LogIn size={18} /> : <ClipboardCheck size={18} />}
             type="submit"
             variant="primary"
             disabled={isSubmitting}
           >
-            {isSubmitting ? "Procesando..." : mode === "login" ? "Entrar" : mode === "request" ? "Enviar solicitud" : "Crear cuenta"}
+            {isSubmitting ? "Procesando..." : mode === "login" ? "Entrar" : "Enviar solicitud"}
           </Button>
         </form>
       </section>

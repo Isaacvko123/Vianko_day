@@ -1,15 +1,6 @@
 import { z } from "zod";
 import { uuidParam } from "./common.schemas.js";
 
-export const registerSchema = z.object({
-  body: z.object({
-    name: z.string().trim().min(2).max(120),
-    email: z.string().trim().email().max(320).toLowerCase(),
-    password: z.string().min(8).max(256),
-    workspaceName: z.string().trim().min(2).max(120)
-  })
-});
-
 export const loginSchema = z.object({
   body: z.object({
     email: z.string().trim().email().max(320).toLowerCase(),

@@ -13,6 +13,7 @@ import type {
   ProjectProgress,
   PaginationMeta,
   RegistrationOptions,
+  RegistrationWorkspace,
   ReportPeriodKey,
   Role,
   StaffingRequest,
@@ -28,13 +29,6 @@ import type {
   WorkspaceMember,
   WorkspaceSummary
 } from "../types";
-
-export type RegisterInput = {
-  name: string;
-  email: string;
-  password: string;
-  workspaceName: string;
-};
 
 export type LoginInput = {
   email: string;
@@ -175,18 +169,15 @@ export type RejectStaffingRequestInput = {
   responseNote?: string;
 };
 
-export function register(input: RegisterInput) {
-  return apiRequest<AuthSession>("/auth/register", {
-    method: "POST",
-    body: input
-  });
-}
-
 export function login(input: LoginInput) {
   return apiRequest<AuthSession>("/auth/login", {
     method: "POST",
     body: input
   });
+}
+
+export function listRegistrationWorkspaces() {
+  return apiRequest<{ workspaces: RegistrationWorkspace[] }>("/auth/workspaces");
 }
 
 export function getRegistrationOptions(workspaceSlug: string) {

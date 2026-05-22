@@ -4,7 +4,6 @@ import type { Prisma, User } from "@prisma/client";
 import { AppError } from "../utils/app-error.js";
 import { generateOpaqueToken, hashPassword, hashToken, verifyPassword } from "../utils/crypto.js";
 import { createSession, revokeSession, rotateSession } from "../services/auth.service.js";
-import { bootstrapWorkspaceForOwner } from "../services/workspace.service.js";
 import type { Request, Response } from "express";
 import { getQueryString } from "../utils/request.js";
 
@@ -41,41 +40,6 @@ async function syncMemberLocalityScopes(
       workspaceMemberId,
       localityId
     }))
-  });
-}
-
-export async function register(req: Request, res: Response) {
-  const { name, email, password, workspaceName } = req.body;
-  const passwordHash = await hashPassword(password);
-
-  const registrationResult = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        name,
-        email,
-        passwordHash
-      }
-    });
-
-    const initialWorkspace = await bootstrapWorkspaceForOwner(tx, {
-      ownerId: user.id,
-      workspaceName
-    });
-
-    return {
-      user,
-      ...initialWorkspace
-    };
-  });
-
-  const authTokens = await createSession(registrationResult.user.id, req);
-
-  res.status(201).json({
-    user: toPublicUser(registrationResult.user),
-    workspace: registrationResult.workspace,
-    project: registrationResult.project,
-    board: registrationResult.board,
-    tokens: authTokens
   });
 }
 
@@ -262,6 +226,26 @@ export async function createInvitationToken() {
     rawToken,
     tokenHash: hashToken(rawToken)
   };
+}
+
+export async function listRegistrationWorkspaces(_req: Request, res: Response) {
+  const workspaces = await prisma.workspace.findMany({
+    where: {
+      isActive: true,
+      ...activeRecordFilter
+    },
+    select: {
+      id: true,
+      name: true,
+      slug: true
+    },
+    orderBy: {
+      name: "asc"
+    },
+    take: 100
+  });
+
+  res.json({ workspaces });
 }
 
 export async function getRegistrationOptions(req: Request, res: Response) {
