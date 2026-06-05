@@ -742,6 +742,21 @@ export async function createWorkspaceLocality(req: Request, res: Response) {
 
   await assertAreaBelongsToWorkspace(workspaceId, selectedAreaId);
 
+  const conflictingLocalityName = await prisma.locality.findFirst({
+    where: {
+      workspaceId,
+      areaId: selectedAreaId,
+      name: req.body.name,
+      code: {
+        not: req.body.code
+      }
+    }
+  });
+
+  if (conflictingLocalityName) {
+    throw new AppError(409, "LOCALITY_NAME_EXISTS", "A locality with this name already exists in the selected area.");
+  }
+
   const existingLocality = await prisma.locality.findFirst({
     where: {
       workspaceId,

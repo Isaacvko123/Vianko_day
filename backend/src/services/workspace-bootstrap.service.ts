@@ -184,21 +184,58 @@ export async function ensureDefaultLocality(tx: Tx, workspaceId: string, input: 
   name: string;
   code: string;
 }) {
-  const existingLocality = await tx.locality.findFirst({
+  const normalizedCode = input.code.toUpperCase();
+  const existingLocalityByCode = await tx.locality.findUnique({
     where: {
-      workspaceId,
-      code: input.code
+      workspaceId_areaId_code: {
+        workspaceId,
+        areaId: input.areaId,
+        code: normalizedCode
+      }
     }
   });
 
-  if (existingLocality) {
-    return tx.locality.update({
+  if (existingLocalityByCode) {
+    const nameConflict = await tx.locality.findFirst({
       where: {
-        id: existingLocality.id
-      },
-      data: {
+        workspaceId,
         areaId: input.areaId,
         name: input.name,
+        id: {
+          not: existingLocalityByCode.id
+        }
+      }
+    });
+
+    return tx.locality.update({
+      where: {
+        id: existingLocalityByCode.id
+      },
+      data: {
+        name: nameConflict ? existingLocalityByCode.name : input.name,
+        description: "Localidad inicial del workspace.",
+        isDefault: true
+      }
+    });
+  }
+
+  const existingLocalityByName = await tx.locality.findUnique({
+    where: {
+      workspaceId_areaId_name: {
+        workspaceId,
+        areaId: input.areaId,
+        name: input.name
+      }
+    }
+  });
+
+  if (existingLocalityByName) {
+    return tx.locality.update({
+      where: {
+        id: existingLocalityByName.id
+      },
+      data: {
+        code: normalizedCode,
         description: "Localidad inicial del workspace.",
         isDefault: true
       }
@@ -210,7 +247,7 @@ export async function ensureDefaultLocality(tx: Tx, workspaceId: string, input: 
       workspaceId,
       areaId: input.areaId,
       name: input.name,
-      code: input.code,
+      code: normalizedCode,
       description: "Localidad inicial del workspace.",
       isDefault: true
     }
