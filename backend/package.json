@@ -18,7 +18,8 @@
     "migrate:chat": "node scripts/apply-chat-migration.mjs",
     "demo:create": "npm run build && node scripts/create-demo-user.mjs",
     "preview:app": "node scripts/preview.mjs",
-    "local:start": "node scripts/start-local.mjs"
+    "local:start": "node scripts/start-local.mjs",
+    "push:configure": "node scripts/configure-push.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",

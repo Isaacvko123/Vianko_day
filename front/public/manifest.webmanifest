@@ -1,1 +1,42 @@
-{"id":"/","name":"Vianko Day","short_name":"Vianko","description":"Tu trabajo, tu equipo y tus pendientes en un solo lugar.","lang":"es-MX","start_url":"/notifications","scope":"/","display":"standalone","background_color":"#f5f7fa","theme_color":"#17243b","icons":[{"src":"/icon-192.png","sizes":"192x192","type":"image/png","purpose":"any maskable"},{"src":"/icon-512.png","sizes":"512x512","type":"image/png","purpose":"any maskable"}],"shortcuts":[{"name":"Mis avisos","url":"/notifications"},{"name":"Mis tareas","url":"/work"}]}
+{
+  "id": "/",
+  "name": "Vianko Day",
+  "short_name": "Vianko",
+  "description": "Tu trabajo, tu equipo y tus pendientes en un solo lugar.",
+  "lang": "es-MX",
+  "start_url": "/notifications",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f5f7fa",
+  "theme_color": "#17243b",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Mis avisos",
+      "url": "/notifications"
+    },
+    {
+      "name": "Mis tareas",
+      "url": "/work"
+    }
+  ],
+  "prefer_related_applications": false,
+  "categories": [
+    "productivity",
+    "business"
+  ],
+  "orientation": "any"
+}

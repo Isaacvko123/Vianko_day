@@ -86,7 +86,7 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     >
       {visibleGlobalError ? <div className="global-error">{visibleGlobalError}</div> : undefined}
 
-      {currentView === "notifications" ? <NotificationInbox inbox={controller.inbox} onOpen={actions.openNotification} onEnable={actions.handleEnableBrowserNotifications} /> : undefined}
+      {currentView === "notifications" ? <NotificationInbox device={controller.devicePush} onDisable={actions.handleDisableBrowserNotifications} onRecheck={actions.checkNotificationDevice} inbox={controller.inbox} onOpen={actions.openNotification} onEnable={actions.handleEnableBrowserNotifications} /> : undefined}
 
       {currentView === "projects" ? (
         <ProjectsView

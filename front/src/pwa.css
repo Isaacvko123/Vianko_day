@@ -1,0 +1,31 @@
+.pwa-install-button { white-space: normal; min-height: 44px; }
+.day-login-form .pwa-install-button { width: 100%; margin-top: 16px; background: #f5f8fd; }
+.day-account-menu .pwa-install-button { justify-content: flex-start; width: 100%; margin: 6px 0; font-size: 13px; }
+.pwa-install-help { font-size: 15px; line-height: 1.65; }
+.pwa-install-help > svg { color: #255ac4; }
+.pwa-install-help ol { display: grid; gap: 14px; padding-left: 22px; margin: 0; }
+.pwa-install-help li > svg { display: inline; vertical-align: middle; }
+.pwa-install-help p { color: #64748b; }
+.pwa-install-help a { color: #255ac4; }
+.pwa-update-notice { position: fixed; z-index: 80; right: 20px; bottom: 20px; display: flex; align-items: center; gap: 12px; width: min(590px, calc(100% - 40px)); padding: 18px; border: 1px solid #d5e2f7; border-radius: 14px; background: white; box-shadow: 0 8px 40px #17243b20; }
+.pwa-update-notice > svg { flex-shrink: 0; color: #255ac4; }
+.pwa-update-notice > div { flex: 1; min-width: 0; }
+.pwa-update-notice strong { font-size: 14px; color: #24364e; }
+.pwa-update-notice p { font-size: 12px; line-height: 1.5; margin: 4px 0 0; color: #64748b; }
+.day-mobile-card.pwa-device-card { display: block; padding: 25px; }
+.pwa-device-card > p { font-size: 14px; line-height: 1.6; }
+.pwa-device-card > .pwa-setup-step { display: flex; align-items: flex-start; gap: 12px; margin: 22px 0 0; padding: 20px 0 0; border-top: 1px solid #d7e2f1; }
+.pwa-setup-step > span { display: grid; place-items: center; flex-shrink: 0; width: 26px; height: 26px; border-radius: 50%; background: #dce9ff; color: #255ac4; font-size: 12px; font-weight: 650; }
+.pwa-setup-step > div { min-width: 0; flex: 1; }
+.pwa-setup-step h3 { font-size: 14px; margin: 0; }
+.pwa-setup-step p { font-size: 13px; line-height: 1.6; color: #64748b; margin: 8px 0 14px; }
+.pwa-setup-step .day-button { width: 100%; min-height: 44px; margin-bottom: 7px; font-size: 13px; white-space: normal; }
+.pwa-device-card > .pwa-device-note { color: #64748b; font-size: 12px; line-height: 1.6; margin: 24px 0 0; }
+@media(max-width:700px) {
+  .pwa-update-notice { bottom: calc(82px + env(safe-area-inset-bottom)); right: 12px; width: calc(100% - 24px); flex-wrap: wrap; gap: 10px; padding: 16px; }
+  .pwa-update-notice > div { flex-basis: calc(100% - 40px); }
+  .pwa-update-notice > .day-button { flex: 1; min-height: 44px; }
+  .day-mobile-card.pwa-device-card { padding: 22px 18px; }
+  .pwa-install-help, .pwa-install-help p { font-size: 15px; }
+  .pwa-setup-step .day-button { font-size: 14px; }
+}

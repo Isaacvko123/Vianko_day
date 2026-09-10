@@ -94,6 +94,10 @@ export function useAppController() {
   const {
     notifications,
     notificationPermission,
+    deviceState,
+    deviceMessage,
+    checkDevice,
+    disableBrowserNotifications,
     dismissNotification,
     requestBrowserNotifications,
     pushRealtimeNotification
@@ -430,6 +434,7 @@ export function useAppController() {
   }
 
   function handleLogout() {
+    navigator.serviceWorker?.controller?.postMessage({type:"CLEAR_DEVICE"});
     if ("serviceWorker" in navigator && token) void navigator.serviceWorker.getRegistration().then(async (registration) => {
       const subscription = await registration?.pushManager.getSubscription();
       if (subscription) { await apiRequest("/push/subscriptions", { token, method: "DELETE", body: { endpoint: subscription.endpoint } }); await subscription.unsubscribe(); }
@@ -577,6 +582,7 @@ export function useAppController() {
     inbox,
     connectionState: realtime.connectionState,
     notificationPermission,
+    devicePush: { state: deviceState, message: deviceMessage },
     canCreateWorkspace: canCreateWorkspaceFromMemberships(workspaces),
     permissions,
     actions: {
@@ -599,6 +605,8 @@ export function useAppController() {
       openNotification,
       openNotificationUrl: (url: string) => navigate(url),
       handleEnableBrowserNotifications: requestBrowserNotifications,
+      handleDisableBrowserNotifications: disableBrowserNotifications,
+      checkNotificationDevice: checkDevice,
       handleAuthenticated,
       handleWorkspaceSelect,
       handleCreateWorkspace,

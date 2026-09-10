@@ -4,6 +4,7 @@ import { AuthenticatedApp } from "./components/AuthenticatedApp";
 import { AuthScreen } from "./components/AuthScreen";
 import { WorkspaceSelect } from "./components/WorkspaceSelect";
 import { useAppController } from "./hooks/useAppController";
+import { PwaUpdateNotice } from './components/InstallAppButton';
 
 const appRoutes = ["/work", "/roles", "/organization", "/notifications", "/projects", "/board", "/completed", "/management", "/members", "/reports"];
 
@@ -67,7 +68,7 @@ export function App() {
   }
 
   return (
-    <Routes>
+    <><PwaUpdateNotice/><Routes>
       <Route path="/join" element={<InvitationScreen onAuthenticated={controller.actions.handleAuthenticated} />} />
       <Route path="/" element={<Navigate to={homePath} replace />} />
       <Route
@@ -79,6 +80,6 @@ export function App() {
         <Route key={path} path={path} element={appRoute(path)} />
       ))}
       <Route path="*" element={<Navigate to={homePath} replace />} />
-    </Routes>
+    </Routes></>
   );
 }

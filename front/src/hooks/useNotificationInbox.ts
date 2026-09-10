@@ -16,6 +16,7 @@ export function useNotificationInbox(token?: string, workspaceId?: string, userI
   useEffect(() => { if(query.data) setPage(current=>Math.min(current,Math.max(0,Math.ceil(query.data.total/30)-1))); }, [query.data?.total]);
   useEffect(() => {
     const badge = navigator as Navigator & { setAppBadge?: (count: number) => Promise<void>; clearAppBadge?: () => Promise<void> };
+    navigator.serviceWorker?.controller?.postMessage({ type: "UNREAD_COUNT", count: unreadCount });
     void (unreadCount ? badge.setAppBadge?.(unreadCount) : badge.clearAppBadge?.())?.catch(() => undefined);
   }, [unreadCount]);
   async function markRead(ids: string[]) {

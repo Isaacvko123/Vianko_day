@@ -39,8 +39,12 @@ notificationRouter.get('/push/config', (_req, res) => res.json({ publicKey: proc
 const pushEndpoint = z.string().url().max(2048).refine((value) => {
   const url = new URL(value);
   return url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443')
-    && ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com'].some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
+    && ['fcm.googleapis.com', 'updates.push.services.mozilla.com', 'web.push.apple.com', 'notify.windows.com'].some((host) => url.hostname === host || url.hostname.endsWith(`.${host}`));
 }, 'Proveedor de notificaciones no admitido.');
+notificationRouter.post('/push/subscriptions/status', validate(z.object({ body: z.object({ endpoint: pushEndpoint }) })), asyncHandler(async (req, res) => {
+  const subscription = await prisma.pushSubscription.findFirst({ where: { userId: req.auth!.userId, endpoint: req.body.endpoint }, select: { id: true } });
+  res.json({ subscribed: Boolean(subscription) });
+}));
 notificationRouter.post('/push/subscriptions', validate(z.object({ body: z.object({ endpoint: pushEndpoint, keys: z.object({ p256dh: z.string().min(16).max(256), auth: z.string().min(8).max(256) }) }) })), asyncHandler(async (req, res) => {
   const userId = req.auth!.userId;
   const count = await prisma.pushSubscription.count({ where: { userId } });
