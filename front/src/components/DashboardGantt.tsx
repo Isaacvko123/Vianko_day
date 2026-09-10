@@ -30,7 +30,7 @@ function TimelineBar({ task, first, days, today, onOpen, onLocate }: {
     </button>;
   }
   const overdue = dates.due !== undefined && dates.due < today;
-  const tone = overdue ? 'overdue' : task.status.category === 'BLOCKED' ? 'blocked' : task.status.category === 'IN_PROGRESS' ? 'progress' : 'planned';
+  const tone = overdue ? 'overdue' : task.status.category === 'BLOCKED' ? 'blocked' : ['IN_PROGRESS', 'REVIEW'].includes(task.status.category) ? 'progress' : 'planned';
   const progress = Math.max(0, Math.min(100, task.progress));
   const description = `${task.title}. ${describeDates(task)}. ${task.status.name}. Avance ${progress}%. Abrir tarea.`;
   if (dates.start === undefined || dates.due === undefined) {

@@ -185,7 +185,7 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
         </>
       ) : undefined}
 
-      {(currentView === 'work' || currentView === 'completed') && <WorkItemsView key={`${selectedWorkspace.id}-${currentView}`} token={session.tokens.accessToken} workspaceId={selectedWorkspace.id} completed={currentView === 'completed'} onCreate={permissions.canCreateTasks ? () => setComposer({}) : undefined} userName={session.user.name} unreadCount={controller.inbox.unreadCount} onInbox={() => actions.setCurrentView('notifications')} onProjects={() => actions.setCurrentView('projects')} onOpen={(projectId, taskId) => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}&task=${taskId}`)} />}
+      {(currentView === 'work' || currentView === 'completed') && <WorkItemsView key={`${selectedWorkspace.id}-${currentView}`} token={session.tokens.accessToken} userId={session.user.id} workspaceId={selectedWorkspace.id} completed={currentView === 'completed'} onCreate={permissions.canCreateTasks ? () => setComposer({}) : undefined} userName={session.user.name} unreadCount={controller.inbox.unreadCount} onInbox={() => actions.setCurrentView('notifications')} onProjects={() => actions.setCurrentView('projects')} onOpen={(projectId, taskId) => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}&task=${taskId}`)} />}
       {currentView === 'roles' && <RolesView key={selectedWorkspace.id} token={session.tokens.accessToken} workspaceId={selectedWorkspace.id} onSaved={() => { void actions.loadMembers(); void actions.loadWorkspaces(); }} onPeople={roleId => actions.openNotificationUrl(`/members?role=${roleId}`)} />}
       {currentView === 'organization' && <OrganizationView token={session.tokens.accessToken} workspaceId={selectedWorkspace.id} onSaved={() => actions.loadWorkspaceCatalog()} key={selectedWorkspace.id} areas={areas} localities={localities} positions={positions} members={members} workspacePermissions={selectedWorkspace.member.permissions ?? []} onCreateArea={actions.handleCreateArea} onCreateLocality={actions.handleCreateLocality} onCreatePosition={actions.handleCreatePosition} />}
 
@@ -243,6 +243,9 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
 
       {currentView === "reports" ? (
         <ReportsView
+          token={session.tokens.accessToken}
+          userId={session.user.id}
+          workspaceId={selectedWorkspace.id}
           onOpenProject={projectId => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}`)}
           onOpenTask={(projectId, taskId) => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}&task=${taskId}`)}
           summary={summary}

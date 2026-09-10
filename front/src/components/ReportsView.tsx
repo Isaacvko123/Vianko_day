@@ -3,7 +3,8 @@ import { ArrowUpRight, BarChart3, FileDown } from 'lucide-react';
 import { Button, EmptyState, LoadingState } from './ui';
 import type { ReportPeriodKey, WorkspaceSummary } from '../types';
 import { formatDate, formatMinutes } from '../lib/format';
-type ReportsViewProps = { summary?: WorkspaceSummary; period: ReportPeriodKey; isLoading: boolean; onPeriodChange: (period: ReportPeriodKey) => void; onRefresh: () => void; onOpenProject: (projectId: string) => void; onOpenTask: (projectId: string, taskId: string) => void };
+import { DashboardGantt } from './LazyDashboardGantt';
+type ReportsViewProps = { token: string; userId: string; workspaceId: string; summary?: WorkspaceSummary; period: ReportPeriodKey; isLoading: boolean; onPeriodChange: (period: ReportPeriodKey) => void; onRefresh: () => void; onOpenProject: (projectId: string) => void; onOpenTask: (projectId: string, taskId: string) => void };
 const reportPeriodOptions: Array<{ value: ReportPeriodKey; label: string }> = [
   { value: "week", label: "Semana" },
   { value: "month", label: "Mes" },
@@ -115,7 +116,7 @@ function openPdfReport(summary: WorkspaceSummary) {
   reportWindow.print();
 }
 
-export function ReportsView({ summary, period, isLoading, onPeriodChange, onOpenProject, onOpenTask }: ReportsViewProps) {
+export function ReportsView({ token, userId, workspaceId, summary, period, isLoading, onPeriodChange, onOpenProject, onOpenTask }: ReportsViewProps) {
   const [tab, setTab] = useState<'projects' | 'people' | 'tasks'>('projects');
   const [page, setPage] = useState(1);
   const projects = summary?.projects ?? [];
@@ -134,6 +135,7 @@ export function ReportsView({ summary, period, isLoading, onPeriodChange, onOpen
     {summary && <p className="report-period-label">{summary.period.label} · {formatDate(summary.period.start)} al {formatDate(summary.period.end)}</p>}
     {isLoading && !summary && <LoadingState label="Calculando el resumen…" rows={4} />}
     <div className="dashboard-metrics" data-guide="reports-kpis"><article><span>Tareas terminadas</span><strong>{completed}<small> / {total}</small></strong><div className="dashboard-progress"><i style={{ width: `${rate}%` }} /></div><small>{rate}% del trabajo registrado</small></article><article><span>Vencidas</span><strong className={overdue ? 'metric-overdue' : ''}>{overdue}</strong><small>Pendientes con fecha superada</small></article><article><span>Bloqueadas</span><strong className={blocked ? 'metric-blocked' : ''}>{blocked}</strong><small>Necesitan ayuda para continuar</small></article><article><span>Tiempo registrado</span><strong>{formatMinutes(minutes)}</strong><small>Reportado por las personas del equipo</small></article></div>
+    <DashboardGantt key={workspaceId} token={token} userId={userId} workspaceId={workspaceId} team onOpen={onOpenTask}/>
     <div className="product-toolbar"><div className="product-tabs">{([['projects', 'Proyectos'], ['people', 'Personas'], ['tasks', 'Tareas']] as const).map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => { setTab(value); setPage(1); }}>{label}</button>)}</div><span className="muted-note">{count} registros</span></div>
     <div className="dashboard-table">
       {tab === 'projects' && projects.slice(start, start + 20).map(project => <button key={project.project_id} className="dashboard-project-row" onClick={() => onOpenProject(project.project_id)}><span><strong>{project.project_name}</strong><small>{project.completed_tasks} terminadas · {project.active_tasks} activas</small></span><span className="dashboard-progress-group"><span className="dashboard-progress"><i style={{ width: `${project.progress_percent ?? 0}%` }} /></span><small>{project.progress_percent ?? 0}%</small></span><span className="dashboard-signals">{project.overdue_tasks > 0 && <em className="signal-red">{project.overdue_tasks} vencidas</em>}{project.blocked_tasks > 0 && <em className="signal-amber">{project.blocked_tasks} bloqueadas</em>}{project.overdue_tasks === 0 && project.blocked_tasks === 0 && <em>Sin alertas</em>}</span><ArrowUpRight size={16} /></button>)}
