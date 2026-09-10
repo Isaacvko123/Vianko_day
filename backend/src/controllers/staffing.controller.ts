@@ -3,6 +3,9 @@ import type { Request, Response } from "express";
 import { activeRecordFilter } from "../db/filters.js";
 import { prisma } from "../db/prisma.js";
 import {
+  getWorkspaceMemberLocalityIds,
+  getRolePermissions,
+  assertRoleGrant,
   assertProjectPermission,
   assertWorkspaceMember,
   roleHasPermission
@@ -55,6 +58,8 @@ const staffingRequestInclude = {
 
 async function canManageAllStaffing(userId: string, workspaceId: string) {
   const member = await assertWorkspaceMember(userId, workspaceId);
+  const permissions = await getRolePermissions(member.roleId ?? undefined, workspaceId);
+  if (member.userType !== "INTERNAL" || !permissions.some((key) => ["workspace.manage", "project.request_staffing", "staffing.respond"].includes(key))) throw new AppError(403, "STAFFING_ACCESS_DENIED", "Las solicitudes de personal son exclusivas de coordinación interna.");
   const canManage =
     (await roleHasPermission(member.roleId ?? undefined, "workspace.manage")) ||
     (await roleHasPermission(member.roleId ?? undefined, "member.manage"));
@@ -142,6 +147,7 @@ async function getPendingStaffingRequest(requestId: string) {
     throw new AppError(404, "STAFFING_REQUEST_NOT_FOUND", "Staffing request not found.");
   }
 
+  if (staffingRequest.project.deletedAt) throw new AppError(409, "PROJECT_ARCHIVED", "El proyecto ya está archivado.");
   if (staffingRequest.status !== "PENDING") {
     throw new AppError(409, "STAFFING_REQUEST_CLOSED", "Only pending staffing requests can be answered.");
   }
@@ -149,7 +155,7 @@ async function getPendingStaffingRequest(requestId: string) {
   return staffingRequest;
 }
 
-async function assertCanRespond(userId: string, workspaceId: string, targetAreaId: string) {
+async function assertCanRespond(userId: string, workspaceId: string, targetAreaId: string, targetLocalityId?: string | null) {
   const { member, canManage } = await canManageAllStaffing(userId, workspaceId);
   const canRespond = await roleHasPermission(member.roleId ?? undefined, "staffing.respond");
 
@@ -157,7 +163,8 @@ async function assertCanRespond(userId: string, workspaceId: string, targetAreaI
     return member;
   }
 
-  if (!canRespond || member.areaId !== targetAreaId) {
+  const localityIds = await getWorkspaceMemberLocalityIds(member);
+  if (!canRespond || member.areaId !== targetAreaId || (targetLocalityId && localityIds.length && !localityIds.includes(targetLocalityId))) {
     throw new AppError(403, "STAFFING_RESPONSE_DENIED", "Only the target area manager can answer this request.");
   }
 
@@ -218,19 +225,10 @@ export async function listStaffingRequests(req: Request, res: Response) {
     limit: Number(req.query.limit),
     offset: Number(req.query.offset)
   });
-  const personalStaffingFilters: Prisma.ProjectStaffingRequestWhereInput[] = [
-    { requesterId: userId },
-    {
-      project: {
-        members: {
-          some: { userId }
-        }
-      }
-    }
-  ];
-
-  if (member.areaId) {
-    personalStaffingFilters.push({ targetAreaId: member.areaId });
+  const personalStaffingFilters: Prisma.ProjectStaffingRequestWhereInput[] = [{ requesterId: userId }];
+  const localityIds = await getWorkspaceMemberLocalityIds(member);
+  if (member.areaId && await roleHasPermission(member.roleId ?? undefined, "staffing.respond")) {
+    personalStaffingFilters.push({ targetAreaId: member.areaId, ...(localityIds.length ? { OR: [{ targetLocalityId: null }, { targetLocalityId: { in: localityIds } }] } : {}) });
   }
 
   const scopedFilter: Prisma.ProjectStaffingRequestWhereInput = canManage
@@ -240,6 +238,7 @@ export async function listStaffingRequests(req: Request, res: Response) {
     };
   const where: Prisma.ProjectStaffingRequestWhereInput = {
     workspaceId,
+    id: typeof req.query.requestId === "string" ? req.query.requestId : undefined,
     status,
     ...scopedFilter
   };
@@ -258,7 +257,7 @@ export async function listStaffingRequests(req: Request, res: Response) {
   ]);
 
   res.json({
-    staffingRequests,
+    staffingRequests: staffingRequests.map((request) => ({ ...request, canRespond: request.status === "PENDING" && (canManage || (personalStaffingFilters.length > 1 && request.targetAreaId === member.areaId && (!request.targetLocalityId || !localityIds.length || localityIds.includes(request.targetLocalityId)))) })),
     pagination: paginationMeta(total, limit, offset)
   });
 }
@@ -277,6 +276,8 @@ export async function createStaffingRequest(req: Request, res: Response) {
   } = req.body;
   const { project, workspaceMember } = await assertProjectPermission(userId, projectId, "project.request_staffing");
 
+  if (workspaceMember.userType !== "INTERNAL") throw new AppError(403, "STAFFING_ACCESS_DENIED", "Solo personal interno puede solicitar apoyo.");
+  if (targetAreaId === project.areaId) throw new AppError(400, "STAFFING_SAME_AREA", "Para tu propia área, agrega personas desde el proyecto. Usa esta solicitud para otra área.");
   await assertArea(project.workspaceId, targetAreaId);
 
   if (targetLocalityId) {
@@ -288,7 +289,7 @@ export async function createStaffingRequest(req: Request, res: Response) {
   }
 
   if (roleId) {
-    await assertRole(project.workspaceId, roleId);
+    await assertRoleGrant(userId, project.workspaceId, roleId, "INTERNAL");
   }
 
   if (requestedUserId) {
@@ -365,6 +366,7 @@ export async function createStaffingRequest(req: Request, res: Response) {
 
   emitRealtimeEvent({
     type: "staffing.requested",
+    requestId: staffingRequest.id,
     workspaceId: staffingRequest.workspaceId,
     projectId: staffingRequest.projectId,
     actorId: userId,
@@ -384,14 +386,16 @@ export async function approveStaffingRequest(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const requestId = getParam(req, "requestId");
   const staffingRequest = await getPendingStaffingRequest(requestId);
-  await assertCanRespond(userId, staffingRequest.workspaceId, staffingRequest.targetAreaId);
+  await assertCanRespond(userId, staffingRequest.workspaceId, staffingRequest.targetAreaId, staffingRequest.targetLocalityId);
 
   const approvedUserIds = uniqueUserIds(req.body.approvedUserIds);
+  if (!approvedUserIds.length || approvedUserIds.length > staffingRequest.quantity) throw new AppError(400, "STAFFING_QUANTITY_INVALID", "Selecciona entre una persona y la cantidad solicitada.");
   const activeMembers = await prisma.workspaceMember.findMany({
     where: {
       workspaceId: staffingRequest.workspaceId,
       userId: { in: approvedUserIds },
       status: "ACTIVE",
+      userType: "INTERNAL",
       areaId: staffingRequest.targetAreaId
     },
     include: {
@@ -404,7 +408,7 @@ export async function approveStaffingRequest(req: Request, res: Response) {
   });
   const validActiveMembers = activeMembers.filter((member) => {
     if (!staffingRequest.targetLocalityId) {
-      return true;
+      return !staffingRequest.positionId || member.positionId === staffingRequest.positionId;
     }
 
     const memberLocalityIds = [
@@ -412,7 +416,7 @@ export async function approveStaffingRequest(req: Request, res: Response) {
       ...member.localityScopes.map((localityScope) => localityScope.localityId)
     ];
 
-    return memberLocalityIds.includes(staffingRequest.targetLocalityId);
+    return memberLocalityIds.includes(staffingRequest.targetLocalityId) && (!staffingRequest.positionId || member.positionId === staffingRequest.positionId);
   });
   const activeMemberByUserId = new Map(validActiveMembers.map((member) => [member.userId, member]));
 
@@ -433,12 +437,12 @@ export async function approveStaffingRequest(req: Request, res: Response) {
           }
         },
         update: {
-          roleId: staffingRequest.roleId || approvedMember?.roleId
+          roleId: staffingRequest.roleId ?? undefined
         },
         create: {
           projectId: staffingRequest.projectId,
           userId: approvedUserId,
-          roleId: staffingRequest.roleId || approvedMember?.roleId
+          roleId: staffingRequest.roleId ?? undefined
         }
       });
 
@@ -460,7 +464,8 @@ export async function approveStaffingRequest(req: Request, res: Response) {
 
     const request = await tx.projectStaffingRequest.update({
       where: {
-        id: staffingRequest.id
+        id: staffingRequest.id,
+        status: "PENDING"
       },
       data: {
         status: "APPROVED",
@@ -491,6 +496,7 @@ export async function approveStaffingRequest(req: Request, res: Response) {
 
   emitRealtimeEvent({
     type: "staffing.approved",
+    requestId: updatedRequest.id,
     workspaceId: updatedRequest.workspaceId,
     projectId: updatedRequest.projectId,
     actorId: userId,
@@ -510,13 +516,14 @@ export async function rejectStaffingRequest(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const requestId = getParam(req, "requestId");
   const staffingRequest = await getPendingStaffingRequest(requestId);
-  await assertCanRespond(userId, staffingRequest.workspaceId, staffingRequest.targetAreaId);
+  await assertCanRespond(userId, staffingRequest.workspaceId, staffingRequest.targetAreaId, staffingRequest.targetLocalityId);
 
   const answeredAt = new Date();
   const updatedRequest = await prisma.$transaction(async (tx) => {
     const request = await tx.projectStaffingRequest.update({
       where: {
-        id: staffingRequest.id
+        id: staffingRequest.id,
+        status: "PENDING"
       },
       data: {
         status: "REJECTED",
@@ -546,6 +553,7 @@ export async function rejectStaffingRequest(req: Request, res: Response) {
 
   emitRealtimeEvent({
     type: "staffing.rejected",
+    requestId: updatedRequest.id,
     workspaceId: updatedRequest.workspaceId,
     projectId: updatedRequest.projectId,
     actorId: userId,
@@ -556,4 +564,15 @@ export async function rejectStaffingRequest(req: Request, res: Response) {
   });
 
   res.json({ staffingRequest: updatedRequest });
+}
+
+export async function staffingCatalog(req: Request, res: Response) {
+  const workspaceId = getQueryString(req, "workspaceId");
+  await canManageAllStaffing(req.auth!.userId, workspaceId);
+  const [areas, localities, positions] = await Promise.all([
+    prisma.area.findMany({ where: { workspaceId }, orderBy: { name: "asc" } }),
+    prisma.locality.findMany({ where: { workspaceId }, orderBy: { name: "asc" } }),
+    prisma.position.findMany({ where: { workspaceId }, orderBy: { name: "asc" } })
+  ]);
+  res.json({ areas, localities, positions });
 }

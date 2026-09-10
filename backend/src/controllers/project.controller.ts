@@ -1,8 +1,13 @@
+import { listTaskPeople } from '../services/task-people.service.js';
+import { effectivePermissions } from "../models/business-policy.js";
 import type { Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
 import { prisma } from "../db/prisma.js";
 import { activeRecordFilter } from "../db/filters.js";
 import {
+  projectVisibilityFilter,
+  assertRoleGrant,
+  getRolePermissions,
   assertProjectAccess,
   assertProjectPermission,
   assertWorkspaceMember,
@@ -22,10 +27,10 @@ async function assertProjectAreaScope(input: {
   requesterLocalityIds?: string[];
   requesterRoleId?: string;
   areaId?: string;
-  localityId?: string;
+  localityId?: string | null;
 }) {
   const selectedAreaId = input.areaId || input.requesterAreaId;
-  const selectedLocalityId = input.localityId || input.requesterLocalityId;
+  const selectedLocalityId = input.localityId !== undefined ? input.localityId : input.areaId && input.areaId !== input.requesterAreaId ? null : input.requesterLocalityId;
   const requesterLocalityIds = input.requesterLocalityIds ?? (input.requesterLocalityId ? [input.requesterLocalityId] : []);
 
   if (!selectedAreaId) {
@@ -41,9 +46,8 @@ async function assertProjectAreaScope(input: {
   }
 
   if (
-    selectedLocalityId &&
     requesterLocalityIds.length > 0 &&
-    !requesterLocalityIds.includes(selectedLocalityId) &&
+    (!selectedLocalityId || !requesterLocalityIds.includes(selectedLocalityId)) &&
     !canManageAcrossWorkspace
   ) {
     throw new AppError(403, "LOCALITY_SCOPE_DENIED", "You can only manage projects in your assigned locality.");
@@ -84,41 +88,13 @@ export async function listProjects(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const workspaceId = getQueryString(req, "workspaceId");
   const workspaceMembership = await assertWorkspaceMember(userId, workspaceId);
-  const canViewAllProjects = await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.view_all");
-  const canViewAreaProjects =
-    (await roleHasPermission(workspaceMembership.roleId ?? undefined, "workspace.manage")) ||
-    (await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.view_all"));
-  const memberLocalityIds = await getWorkspaceMemberLocalityIds(workspaceMembership);
-  const areaProjectFilter: Prisma.ProjectWhereInput =
-    workspaceMembership.areaId
-      ? {
-        visibility: "WORKSPACE",
-        areaId: workspaceMembership.areaId,
-        ...(memberLocalityIds.length > 0 ? { localityId: { in: memberLocalityIds } } : {})
-      }
-      : { members: { some: { userId } } };
-  const mentionedProjectFilter: Prisma.ProjectWhereInput = {
-    tasks: {
-      some: {
-        ...activeRecordFilter,
-        mentions: {
-          some: { userId }
-        }
-      }
-    }
-  };
-  const projectVisibilityFilter: Prisma.ProjectWhereInput =
-    workspaceMembership.userType === "INTERNAL" && canViewAllProjects
-      ? {}
-      : workspaceMembership.userType === "INTERNAL" && canViewAreaProjects && workspaceMembership.areaId
-        ? { OR: [areaProjectFilter, { members: { some: { userId } } }, mentionedProjectFilter] }
-        : { OR: [{ members: { some: { userId } } }, mentionedProjectFilter] };
+  const visibilityFilter = await projectVisibilityFilter(userId, workspaceMembership);
 
   const projects = await prisma.project.findMany({
     where: {
       workspaceId,
       ...activeRecordFilter,
-      ...projectVisibilityFilter
+      ...visibilityFilter
     },
     include: {
       area: true,
@@ -142,7 +118,12 @@ export async function listProjects(req: Request, res: Response) {
     }
   });
 
-  res.json({ projects });
+  const workspacePermissions = await getRolePermissions(workspaceMembership.roleId ?? undefined, workspaceId);
+  res.json({ projects: await Promise.all(projects.map(async (project) => {
+    const roleId = project.members.find((member) => member.userId === userId)?.roleId;
+    return { ...project, permissions: effectivePermissions(workspacePermissions,
+      roleId ? await getRolePermissions(roleId, workspaceId) : undefined, workspaceMembership.userType) };
+  })) });
 }
 
 export async function createProject(req: Request, res: Response) {
@@ -150,6 +131,7 @@ export async function createProject(req: Request, res: Response) {
   const { workspaceId, areaId, localityId, name, description, visibility, color, startDate, endDate } = req.body;
 
   const workspaceMembership = await assertWorkspacePermission(userId, workspaceId, "project.create");
+  if (startDate && endDate && new Date(startDate) > new Date(endDate)) throw new AppError(400, "PROJECT_DATES_INVALID", "La entrega debe ser posterior al inicio.");
   const requesterLocalityIds = await getWorkspaceMemberLocalityIds(workspaceMembership);
   const { selectedAreaId, selectedLocalityId } = await assertProjectAreaScope({
     workspaceId,
@@ -190,7 +172,7 @@ export async function createProject(req: Request, res: Response) {
       data: {
         projectId: project.id,
         userId,
-        roleId: creatorWorkspaceMembership?.roleId
+        roleId: undefined
       }
     });
 
@@ -234,7 +216,7 @@ export async function createProject(req: Request, res: Response) {
 export async function getProject(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const projectId = getParam(req, "projectId");
-  const { project } = await assertProjectAccess(userId, projectId);
+  const { project, permissions } = await assertProjectAccess(userId, projectId);
 
   const fullProject = await prisma.project.findUnique({
     where: { id: project.id },
@@ -266,7 +248,7 @@ export async function getProject(req: Request, res: Response) {
     }
   });
 
-  res.json({ project: fullProject });
+  res.json({ project: { ...fullProject, permissions } });
 }
 
 export async function updateProject(req: Request, res: Response) {
@@ -281,11 +263,14 @@ export async function updateProject(req: Request, res: Response) {
     requesterLocalityIds,
     requesterRoleId: workspaceMember.roleId ?? undefined,
     areaId: req.body.areaId ?? project.areaId ?? undefined,
-    localityId: req.body.localityId ?? project.localityId ?? undefined
+    localityId: req.body.localityId !== undefined ? req.body.localityId : project.localityId
   });
 
+  const nextStart = req.body.startDate === null ? null : req.body.startDate ? new Date(req.body.startDate) : project.startDate;
+  const nextEnd = req.body.endDate === null ? null : req.body.endDate ? new Date(req.body.endDate) : project.endDate;
+  if (nextStart && nextEnd && nextStart > nextEnd) throw new AppError(400, "PROJECT_DATES_INVALID", "La entrega debe ser posterior al inicio.");
   const updatedProject = await prisma.project.update({
-    where: { id: project.id },
+    where: { id: project.id, updatedAt: req.body.expectedUpdatedAt ? new Date(req.body.expectedUpdatedAt) : project.updatedAt },
     data: {
       areaId: selectedAreaId,
       localityId: selectedLocalityId,
@@ -293,8 +278,8 @@ export async function updateProject(req: Request, res: Response) {
       description: req.body.description,
       visibility: req.body.visibility,
       color: req.body.color,
-      startDate: req.body.startDate ? new Date(req.body.startDate) : undefined,
-      endDate: req.body.endDate ? new Date(req.body.endDate) : undefined
+      startDate: nextStart,
+      endDate: nextEnd
     },
     include: {
       area: true,
@@ -351,7 +336,7 @@ export async function updateProject(req: Request, res: Response) {
     message: `Se actualizo el proyecto ${updatedProject.name}.`
   });
 
-  res.json({ project: updatedProject });
+  res.json({ project: { ...updatedProject, permissions: (await assertProjectAccess(userId, projectId)).permissions } });
 }
 
 async function getProjectArchiveRecipientUserIds(project: {
@@ -515,6 +500,7 @@ export async function addProjectMember(req: Request, res: Response) {
   }
 
   if (roleId) {
+    await assertRoleGrant(userId, project.workspaceId, roleId, targetWorkspaceMembership.userType);
     const role = await prisma.role.findFirst({
       where: {
         id: roleId,
@@ -582,4 +568,9 @@ export async function addProjectMember(req: Request, res: Response) {
   });
 
   res.status(201).json({ member: projectMembership });
+}
+
+export async function getTaskPeople(req: Request, res: Response) {
+  const access = await assertProjectPermission(req.auth!.userId, getParam(req, "projectId"), "task.assign");
+  res.json({ people: await listTaskPeople(access) });
 }

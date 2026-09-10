@@ -1,16 +1,9 @@
-import { AlertTriangle, BarChart3, CheckCircle2, Clock3, FileDown, ListChecks, RefreshCw, TimerReset } from "lucide-react";
-import { Button, Card, EmptyState, LoadingState, PageHeader, StatCard } from "./ui";
-import type { ReportPeriodKey, WorkspaceSummary } from "../types";
-import { formatDate, formatMinutes } from "../lib/format";
-
-type ReportsViewProps = {
-  summary?: WorkspaceSummary;
-  period: ReportPeriodKey;
-  isLoading: boolean;
-  onPeriodChange: (period: ReportPeriodKey) => void;
-  onRefresh: () => void;
-};
-
+import { useState } from 'react';
+import { ArrowUpRight, BarChart3, FileDown } from 'lucide-react';
+import { Button, EmptyState, LoadingState } from './ui';
+import type { ReportPeriodKey, WorkspaceSummary } from '../types';
+import { formatDate, formatMinutes } from '../lib/format';
+type ReportsViewProps = { summary?: WorkspaceSummary; period: ReportPeriodKey; isLoading: boolean; onPeriodChange: (period: ReportPeriodKey) => void; onRefresh: () => void; onOpenProject: (projectId: string) => void; onOpenTask: (projectId: string, taskId: string) => void };
 const reportPeriodOptions: Array<{ value: ReportPeriodKey; label: string }> = [
   { value: "week", label: "Semana" },
   { value: "month", label: "Mes" },
@@ -70,12 +63,13 @@ function openPdfReport(summary: WorkspaceSummary) {
     minutes: summary.users.reduce((sum, user) => sum + user.total_minutes, 0)
   };
   const rows = reportRows(summary);
-  const reportWindow = window.open("", "_blank", "noopener,noreferrer");
+  const reportWindow = window.open("", "_blank");
 
   if (!reportWindow) {
     return;
   }
 
+  reportWindow.opener = null;
   reportWindow.document.write(`
     <!doctype html>
     <html lang="es">
@@ -121,188 +115,32 @@ function openPdfReport(summary: WorkspaceSummary) {
   reportWindow.print();
 }
 
-export function ReportsView({ summary, period, isLoading, onPeriodChange, onRefresh }: ReportsViewProps) {
+export function ReportsView({ summary, period, isLoading, onPeriodChange, onOpenProject, onOpenTask }: ReportsViewProps) {
+  const [tab, setTab] = useState<'projects' | 'people' | 'tasks'>('projects');
+  const [page, setPage] = useState(1);
   const projects = summary?.projects ?? [];
-  const users = summary?.users ?? [];
-  const activities = summary?.activities ?? [];
-  const totalTasks = projects.reduce((sum, project) => sum + project.total_tasks, 0);
-  const completedTasks = projects.reduce((sum, project) => sum + project.completed_tasks, 0);
-  const blockedTasks = projects.reduce((sum, project) => sum + project.blocked_tasks, 0);
-  const overdueTasks = projects.reduce((sum, project) => sum + project.overdue_tasks, 0);
-  const lateTasks = projects.reduce((sum, project) => sum + project.late_tasks, 0);
-  const unestimatedTasks = projects.reduce((sum, project) => sum + project.unestimated_tasks, 0);
-  const totalMinutes = users.reduce((sum, user) => sum + user.total_minutes, 0);
-  const estimatedMinutes = projects.reduce((sum, project) => sum + (project.estimate_minutes ?? 0), 0);
-  const pendingMinutes = Math.max(estimatedMinutes - totalMinutes, 0);
-  const completionRate = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
-  const onTimeRate = completedTasks > 0 ? Math.max(0, Math.round(((completedTasks - lateTasks) / completedTasks) * 100)) : 0;
-  const atRiskProjects = projects.filter((project) => project.blocked_tasks > 0 || project.overdue_tasks > 0);
-  const topProject = [...projects].sort((first, second) => (second.progress_percent ?? 0) - (first.progress_percent ?? 0))[0];
-  const topUser = [...users].sort((first, second) => second.total_minutes - first.total_minutes)[0];
-
-  return (
-    <section className="page reports-page">
-      <PageHeader
-        eyebrow="Reportes"
-        title="Resumen operativo"
-        description="Indicadores de avance, bloqueo y tiempo registrado para decidir rapido sin perseguir datos."
-        actions={
-          <div className="report-actions">
-            <label>
-              Periodo
-              <select value={period} onChange={(event) => onPeriodChange(event.target.value as ReportPeriodKey)}>
-                {reportPeriodOptions.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
-            </label>
-            <Button icon={<FileDown size={17} />} variant="secondary" disabled={!summary} onClick={() => summary ? openPdfReport(summary) : undefined}>PDF</Button>
-            <Button icon={<RefreshCw size={17} />} variant="secondary" onClick={onRefresh}>Actualizar</Button>
-          </div>
-        }
-      />
-
-      {isLoading ? <LoadingState label="Calculando reportes..." rows={4} /> : undefined}
-
-      <section className="report-hero-panel" data-guide="reports-kpis">
-        <article className="report-score-card">
-          <span>Salud operativa</span>
-          <strong>{completionRate}%</strong>
-          <div className="progress-track">
-            <span style={{ width: `${completionRate}%` }} />
-          </div>
-          <small>{completedTasks} de {totalTasks} actividades terminadas</small>
-        </article>
-        <article>
-          <span>Proyecto con mejor avance</span>
-          <strong>{topProject?.project_name ?? "Sin proyectos"}</strong>
-          <small>{topProject ? `${topProject.progress_percent ?? 0}% completado` : "Crea actividades para medir avance"}</small>
-        </article>
-        <article>
-          <span>Mayor carga registrada</span>
-          <strong>{topUser?.name ?? "Sin registros"}</strong>
-          <small>{topUser ? `${formatMinutes(topUser.total_minutes)} invertidos` : "Registra tiempo para medir carga"}</small>
-        </article>
-        <article className={atRiskProjects.length > 0 ? "risk-card warning" : "risk-card"}>
-          <span>Riesgo actual</span>
-          <strong>{atRiskProjects.length}</strong>
-          <small>proyecto(s) con bloqueos o vencimientos</small>
-        </article>
-      </section>
-
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6" data-guide="reports-kpis">
-        <StatCard icon={<ListChecks size={18} />} label="Total" value={totalTasks} />
-        <StatCard icon={<CheckCircle2 size={18} />} label="Terminadas" value={completedTasks} tone="green" />
-        <StatCard icon={<AlertTriangle size={18} />} label="Bloqueadas" value={blockedTasks} tone={blockedTasks > 0 ? "amber" : "slate"} />
-        <StatCard icon={<TimerReset size={18} />} label="Vencidas" value={overdueTasks} tone={overdueTasks > 0 ? "red" : "slate"} />
-        <StatCard icon={<TimerReset size={18} />} label="Con retraso" value={lateTasks} tone={lateTasks > 0 ? "red" : "slate"} />
-        <StatCard icon={<Clock3 size={18} />} label="Horas" value={formatMinutes(totalMinutes)} tone="blue" />
-      </section>
-
-      <section className="report-time-panel">
-        <article>
-          <span>Estimado total</span>
-          <strong>{formatMinutes(estimatedMinutes)}</strong>
-          <small>Incluye actividades principales y subtareas planeadas.</small>
-        </article>
-        <article>
-          <span>Tiempo invertido</span>
-          <strong>{formatMinutes(totalMinutes)}</strong>
-          <small>Registrado por usuarios en actividades y subtareas.</small>
-        </article>
-        <article className={pendingMinutes > 0 ? "warning" : "ok"}>
-          <span>Balance operativo</span>
-          <strong>{pendingMinutes > 0 ? formatMinutes(pendingMinutes) : "Estimado cubierto"}</strong>
-          <small>{pendingMinutes > 0 ? "Tiempo estimado aun no consumido." : "El tiempo real ya cubrio o supero la estimacion."}</small>
-        </article>
-        <article className={onTimeRate < 80 && completedTasks > 0 ? "warning" : "ok"}>
-          <span>Cierre a tiempo</span>
-          <strong>{onTimeRate}%</strong>
-          <small>{lateTasks} terminadas fuera de fecha; {unestimatedTasks} sin estimar.</small>
-        </article>
-      </section>
-
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(360px,0.75fr)]">
-        <Card className="grid gap-4 p-5" data-guide="reports-projects">
-          <h2 className="flex items-center gap-2 text-lg font-black text-slate-950"><BarChart3 size={18} /> Avance por proyecto</h2>
-          <div className="report-list">
-            {projects.map((project) => (
-              <article className={project.overdue_tasks > 0 || project.blocked_tasks > 0 ? "report-row at-risk" : "report-row"} key={project.project_id}>
-                <div>
-                  <strong>{project.project_name}</strong>
-                  <small>
-                    {project.completed_tasks}/{project.total_tasks} terminadas · {project.active_tasks} activas · {project.blocked_tasks} bloqueadas · {project.overdue_tasks} vencidas
-                    {" · "}Estimado {formatMinutes(project.estimate_minutes ?? 0)} · Real {formatMinutes(project.actual_minutes ?? 0)}
-                  </small>
-                  <small>{project.late_tasks} con retraso · {project.unestimated_tasks} sin estimar</small>
-                </div>
-                <div className="progress-track">
-                  <span style={{ width: `${project.progress_percent ?? 0}%` }} />
-                </div>
-                <em>{project.progress_percent ?? 0}%</em>
-              </article>
-            ))}
-            {!isLoading && projects.length === 0 ? (
-              <EmptyState title="Sin avance disponible" description="Cuando existan proyectos con actividades, aqui se vera su progreso." />
-            ) : undefined}
-          </div>
-        </Card>
-
-        <Card className="grid gap-4 p-5" data-guide="reports-users">
-          <h2 className="flex items-center gap-2 text-lg font-black text-slate-950"><Clock3 size={18} /> Productividad por usuario</h2>
-          <div className="report-list">
-            {users.map((user, index) => (
-              <article key={user.user_id}>
-                <div>
-                  <strong>#{index + 1} {user.name}</strong>
-                  <small>{user.completed_tasks} terminadas · {user.active_tasks} activas · {user.assigned_tasks} asignadas</small>
-                  <small>{user.overdue_tasks} vencidas · {user.blocked_tasks} bloqueadas · {user.late_tasks} tarde · Est. {formatMinutes(user.estimate_minutes)}</small>
-                </div>
-                <em>{formatMinutes(user.total_minutes)}</em>
-              </article>
-            ))}
-            {!isLoading && users.length === 0 ? (
-              <EmptyState title="Sin tiempo registrado" description="El ranking aparecera cuando el equipo registre tiempo trabajado." />
-            ) : undefined}
-          </div>
-        </Card>
-      </div>
-
-      <Card className="grid gap-4 p-5" data-guide="reports-activities">
-        <h2 className="flex items-center gap-2 text-lg font-black text-slate-950"><ListChecks size={18} /> Actividades, tiempos y retrasos</h2>
-        <div className="report-activity-table">
-          <span>Actividad</span>
-          <span>Proyecto</span>
-          <span>Fechas</span>
-          <span>Tiempo</span>
-          <span>Riesgo</span>
-          {activities.map((activity) => (
-            <article className={activity.delay_days > 0 ? "late" : ""} key={activity.task_id}>
-              <div>
-                <strong>{activity.title}</strong>
-                <small>{activity.description || "Sin descripcion"}</small>
-                <small>{activity.assignee_names || "Sin asignados"} · {activity.subtask_count} subtareas · {activity.comment_count} comentarios</small>
-              </div>
-              <span>{activity.project_name}</span>
-              <span>
-                Inicio {formatDate(activity.start_at)}
-                <small>Fin {formatDate(activity.due_at)} · Cierre {formatDate(activity.completed_at)}</small>
-              </span>
-              <span>
-                Real {formatMinutes(activity.actual_minutes)}
-                <small>Estimado {formatMinutes(activity.estimate_minutes)}</small>
-              </span>
-              <em>
-                {activity.delay_days > 0 ? `${activity.delay_days} dia(s)` : "A tiempo"}
-                <small>{activity.status_name} · {activity.priority}</small>
-              </em>
-            </article>
-          ))}
-        </div>
-        {!isLoading && activities.length === 0 ? (
-          <EmptyState title="Sin actividades para reportar" description="Cuando existan actividades, aqui apareceran tiempos, cierres y retrasos." />
-        ) : undefined}
-      </Card>
-    </section>
-  );
+  const people = summary?.users ?? [];
+  const tasks = summary?.activities ?? [];
+  const total = projects.reduce((sum, project) => sum + project.total_tasks, 0);
+  const completed = projects.reduce((sum, project) => sum + project.completed_tasks, 0);
+  const overdue = projects.reduce((sum, project) => sum + project.overdue_tasks, 0);
+  const blocked = projects.reduce((sum, project) => sum + project.blocked_tasks, 0);
+  const minutes = people.reduce((sum, person) => sum + person.total_minutes, 0);
+  const rate = total ? Math.round(completed / total * 100) : 0;
+  const count = tab === 'projects' ? projects.length : tab === 'people' ? people.length : tasks.length;
+  const pages = Math.max(1, Math.ceil(count / 20)); const activePage = Math.min(page, pages); const start = (activePage - 1) * 20;
+  return <section className="page product-page reports-page">
+    <header className="product-heading"><div><p className="eyebrow">Seguimiento del equipo</p><h1>Resumen del trabajo</h1><p>Revisa avances y pendientes de los proyectos dentro de tu alcance.</p></div><div className="report-primary-actions"><select aria-label="Período del reporte" value={period} onChange={event => { setPage(1); onPeriodChange(event.target.value as ReportPeriodKey); }}>{reportPeriodOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select><Button icon={<FileDown size={16} />} disabled={!summary} onClick={() => summary && openPdfReport(summary)}>Exportar PDF</Button></div></header>
+    {summary && <p className="report-period-label">{summary.period.label} · {formatDate(summary.period.start)} al {formatDate(summary.period.end)}</p>}
+    {isLoading && !summary && <LoadingState label="Calculando el resumen…" rows={4} />}
+    <div className="dashboard-metrics" data-guide="reports-kpis"><article><span>Tareas terminadas</span><strong>{completed}<small> / {total}</small></strong><div className="dashboard-progress"><i style={{ width: `${rate}%` }} /></div><small>{rate}% del trabajo registrado</small></article><article><span>Vencidas</span><strong className={overdue ? 'metric-overdue' : ''}>{overdue}</strong><small>Pendientes con fecha superada</small></article><article><span>Bloqueadas</span><strong className={blocked ? 'metric-blocked' : ''}>{blocked}</strong><small>Necesitan ayuda para continuar</small></article><article><span>Tiempo registrado</span><strong>{formatMinutes(minutes)}</strong><small>Reportado por las personas del equipo</small></article></div>
+    <div className="product-toolbar"><div className="product-tabs">{([['projects', 'Proyectos'], ['people', 'Personas'], ['tasks', 'Tareas']] as const).map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => { setTab(value); setPage(1); }}>{label}</button>)}</div><span className="muted-note">{count} registros</span></div>
+    <div className="dashboard-table">
+      {tab === 'projects' && projects.slice(start, start + 20).map(project => <button key={project.project_id} className="dashboard-project-row" onClick={() => onOpenProject(project.project_id)}><span><strong>{project.project_name}</strong><small>{project.completed_tasks} terminadas · {project.active_tasks} activas</small></span><span className="dashboard-progress-group"><span className="dashboard-progress"><i style={{ width: `${project.progress_percent ?? 0}%` }} /></span><small>{project.progress_percent ?? 0}%</small></span><span className="dashboard-signals">{project.overdue_tasks > 0 && <em className="signal-red">{project.overdue_tasks} vencidas</em>}{project.blocked_tasks > 0 && <em className="signal-amber">{project.blocked_tasks} bloqueadas</em>}{project.overdue_tasks === 0 && project.blocked_tasks === 0 && <em>Sin alertas</em>}</span><ArrowUpRight size={16} /></button>)}
+      {tab === 'people' && <>{people.length > 0 && <div className="dashboard-people-row table-labels"><span>Persona</span><span>Activas</span><span>Terminadas</span><span>Tiempo</span></div>}{people.slice(start, start + 20).map(person => <div className="dashboard-people-row" key={person.user_id}><span><strong>{person.name}</strong><small>{person.overdue_tasks} vencidas · {person.blocked_tasks} bloqueadas</small></span><span>{person.active_tasks}</span><span>{person.completed_tasks}</span><span>{formatMinutes(person.total_minutes)}</span></div>)}</>}
+      {tab === 'tasks' && tasks.slice(start, start + 20).map(task => <button className="dashboard-task-row" key={task.task_id} onClick={() => onOpenTask(task.project_id, task.task_id)}><span><strong>{task.title}</strong><small>{task.project_name} · {task.assignee_names || 'Sin asignar'}</small></span><span>{task.status_name}</span><span>{task.delay_days > 0 ? <em className="signal-red">{task.delay_days} días de retraso</em> : formatDate(task.due_at)}</span><ArrowUpRight size={16} /></button>)}
+      {!isLoading && !count && <EmptyState icon={<BarChart3 size={25} />} title="Todavía no hay datos para este período" description="Los avances aparecerán cuando el equipo cree tareas y registre su trabajo." />}
+    </div>
+    {count > 20 && <footer className="product-pagination"><span>{start + 1}–{Math.min(start + 20, count)} de {count}</span><div><Button size="sm" disabled={activePage <= 1} onClick={() => setPage(activePage - 1)}>Anterior</Button><span>{activePage} de {pages}</span><Button size="sm" disabled={activePage >= pages} onClick={() => setPage(activePage + 1)}>Siguiente</Button></div></footer>}
+  </section>;
 }

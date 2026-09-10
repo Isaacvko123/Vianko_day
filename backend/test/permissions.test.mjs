@@ -35,7 +35,8 @@ test("manager, technical lead and developer boundaries stay intentional", () => 
   const coordinator = rolePermissions("Coordinador");
   const developer = rolePermissions("Developer");
 
-  assert.ok(manager.has("project.view_all"), "Gerente debe ver todos los proyectos.");
+  assert.ok(manager.has("project.view_area"));
+  assert.equal(manager.has("project.view_all"), false, "Gerente debe quedar limitado a su área y proyectos asignados.");
   assert.ok(manager.has("staffing.respond"), "Gerente debe responder solicitudes de personal.");
   assert.equal(manager.has("project.delete"), false, "Gerente no debe archivar proyectos completos.");
   assert.ok(technicalLead.has("project.create"), "Lider TI debe crear proyectos propios.");

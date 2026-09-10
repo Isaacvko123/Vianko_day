@@ -1,9 +1,13 @@
+import { enrollTaskPeople, taskPeopleWhere } from '../services/task-people.service.js';
+import { canManageProjectTasks } from "../models/business-policy.js";
+import { Prisma } from "@prisma/client";
+import { assertTaskDateRange, resolveTaskPlanning } from "../services/task-planning.service.js";
 import type { Request, Response } from "express";
 import { prisma } from "../db/prisma.js";
 import { activeRecordFilter } from "../db/filters.js";
 import { clearNullableTimestamp } from "../db/nullable-values.js";
 import { AppError } from "../utils/app-error.js";
-import { assertProjectPermission, assertTaskPermission, assertTaskStatusChangePermission, canSeeEveryTaskInProject, canSeeInternalComments, roleHasPermission } from "../services/access-control.service.js";
+import { assertProjectPermission, assertTaskPermission, assertTaskStatusChangePermission, capabilitiesForTask, canSeeInternalComments, roleHasPermission } from "../services/access-control.service.js";
 import { emitRealtimeEvent } from "../services/realtime.service.js";
 import { auditJson } from "../utils/audit-json.js";
 import { decryptText, encryptText } from "../utils/crypto.js";
@@ -37,7 +41,7 @@ async function assertCompletedTaskCanBeReopened(task: { completedAt: Date | unde
   }
 
   const canManageWorkspace = await roleHasPermission(roleId, "workspace.manage");
-  const canReopenCompletedTasks = await roleHasPermission(roleId, "project.view_all");
+  const canReopenCompletedTasks = await roleHasPermission(roleId, "task.reopen");
 
   if (!canManageWorkspace && !canReopenCompletedTasks) {
     throw new AppError(403, "TASK_REOPEN_DENIED", "Only admin or area managers can reopen completed tasks.");
@@ -76,8 +80,8 @@ async function getBoardAndAuthorizeTaskOperation(
     throw new AppError(404, "BOARD_NOT_FOUND", "Board not found.");
   }
 
-  await assertProjectPermission(userId, board.projectId, permission);
-  return board;
+  const access = await assertProjectPermission(userId, board.projectId, permission);
+  return { ...board, access };
 }
 
 type BoardForTaskOperation = Awaited<ReturnType<typeof getBoardAndAuthorizeTaskOperation>>;
@@ -86,7 +90,7 @@ function getUniqueAssigneeIds(assigneeIds: string[] | undefined) {
   return [...new Set<string>(assigneeIds ?? [])];
 }
 
-async function assertParentTaskBelongsToSameProject(board: BoardForTaskOperation, parentTaskId?: string) {
+async function assertParentTaskBelongsToSameProject(board: BoardForTaskOperation, userId: string, parentTaskId?: string) {
   if (!parentTaskId) {
     return;
   }
@@ -96,47 +100,19 @@ async function assertParentTaskBelongsToSameProject(board: BoardForTaskOperation
       id: parentTaskId,
       workspaceId: board.workspaceId,
       projectId: board.projectId,
+      boardId: board.id,
+      parentTaskId: null,
+      completedAt: null,
       ...activeRecordFilter
     }
   });
 
   if (!parentTask) {
-    throw new AppError(400, "PARENT_TASK_INVALID", "Parent task must belong to the same project.");
+    throw new AppError(400, "PARENT_TASK_INVALID", "La tarea principal debe estar abierta, en el mismo tablero y no ser una subtarea.");
   }
+  await assertTaskPermission(userId, parentTaskId, "task.create");
 }
 
-async function assertAssigneesCanWorkOnTask(board: BoardForTaskOperation, assigneeIds: string[]) {
-  if (assigneeIds.length === 0) {
-    return;
-  }
-
-  const activeWorkspaceMembers = await prisma.workspaceMember.findMany({
-    where: {
-      workspaceId: board.workspaceId,
-      userId: { in: assigneeIds },
-      status: "ACTIVE"
-    }
-  });
-
-  if (activeWorkspaceMembers.length !== assigneeIds.length) {
-    throw new AppError(400, "ASSIGNEE_INVALID", "All assignees must be active workspace members.");
-  }
-
-  const projectMemberCount = await prisma.projectMember.count({
-    where: {
-      projectId: board.projectId,
-      userId: { in: assigneeIds }
-    }
-  });
-
-  if (projectMemberCount !== assigneeIds.length) {
-    throw new AppError(
-      400,
-      "ASSIGNEE_PROJECT_REQUIRED",
-      "Assignees must belong to the project before they can receive tasks."
-    );
-  }
-}
 
 async function assertMentionedUserBelongsToWorkspace(workspaceId: string, targetUserId: string) {
   const workspaceMembership = await prisma.workspaceMember.findUnique({
@@ -145,10 +121,10 @@ async function assertMentionedUserBelongsToWorkspace(workspaceId: string, target
         workspaceId,
         userId: targetUserId
       }
-    }
+    }, include: { user: { select: { isActive: true } } }
   });
 
-  if (!workspaceMembership || workspaceMembership.status !== "ACTIVE") {
+  if (!workspaceMembership || workspaceMembership.status !== "ACTIVE" || !workspaceMembership.user.isActive) {
     throw new AppError(400, "MENTION_USER_INVALID", "Mentioned user must be an active workspace member.");
   }
 }
@@ -199,23 +175,7 @@ export async function listTasks(req: Request, res: Response) {
   const taskView = view === "completed" ? "completed" : "active";
 
   const board = await getBoardAndAuthorizeTaskOperation(boardId, userId, "task.view_all");
-  const [workspaceMember, projectMember] = await Promise.all([
-    prisma.workspaceMember.findUnique({
-      where: {
-        workspaceId_userId: {
-          workspaceId: board.workspaceId,
-          userId
-        }
-      }
-    }),
-    prisma.projectMember.findFirst({
-      where: {
-        projectId: board.projectId,
-        userId
-      }
-    })
-  ]);
-  const canSeeEveryTask = await canSeeEveryTaskInProject(workspaceMember?.roleId ?? undefined, projectMember?.roleId ?? undefined);
+  const canSeeEveryTask = canManageProjectTasks(board.access.permissions);
   const stateFilter = taskView === "completed"
     ? {
         OR: [
@@ -248,6 +208,7 @@ export async function listTasks(req: Request, res: Response) {
       assignees: assigneeId ? { some: { userId: String(assigneeId) } } : undefined
     },
     include: {
+      parentTask: { select: { completedAt: true } },
       status: true,
       assignees: {
         include: {
@@ -293,26 +254,27 @@ export async function listTasks(req: Request, res: Response) {
       },
       _count: {
         select: {
-          comments: true,
+          comments: { where: { deletedAt: null, ...(board.access.workspaceMember.userType === "EXTERNAL" ? { isInternal: false } : {}) } },
           timeLogs: true,
           subtasks: true
         }
       }
     },
     orderBy: taskView === "completed"
-      ? [{ completedAt: "desc" }, { updatedAt: "desc" }]
-      : [{ dueAt: "asc" }, { createdAt: "desc" }],
+      ? [{ completedAt: "desc" }, { updatedAt: "desc" }, { id: "asc" }]
+      : [{ dueAt: "asc" }, { createdAt: "desc" }, { id: "asc" }],
     take: limit ? Number(limit) : undefined,
     skip: offset ? Number(offset) : undefined
   });
 
-  res.json({ tasks });
+  res.json({ tasks: tasks.map((task) => ({ ...task, capabilities: capabilitiesForTask(task, userId, board.access, board.statuses) })) });
 }
 
 export async function listSubtasks(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const taskId = getParam(req, "taskId");
-  const { task } = await assertTaskPermission(userId, taskId, "task.view_all");
+  const access = await assertTaskPermission(userId, taskId, "task.view_all");
+  const { task } = access;
 
   const subtasks = await prisma.task.findMany({
     where: {
@@ -320,6 +282,7 @@ export async function listSubtasks(req: Request, res: Response) {
       ...activeRecordFilter
     },
     include: {
+      parentTask: { select: { completedAt: true } },
       status: true,
       assignees: {
         include: {
@@ -365,7 +328,7 @@ export async function listSubtasks(req: Request, res: Response) {
       },
       _count: {
         select: {
-          comments: true,
+          comments: { where: { deletedAt: null, ...(access.workspaceMember.userType === "EXTERNAL" ? { isInternal: false } : {}) } },
           timeLogs: true,
           subtasks: true
         }
@@ -378,7 +341,7 @@ export async function listSubtasks(req: Request, res: Response) {
     ]
   });
 
-  res.json({ subtasks });
+  res.json({ subtasks: subtasks.map((subtask) => ({ ...subtask, capabilities: capabilitiesForTask({ ...subtask, parentTask: task }, userId, access, task.board.statuses) })).filter((subtask) => subtask.capabilities.canView) });
 }
 
 export async function createTask(req: Request, res: Response) {
@@ -398,14 +361,21 @@ export async function createTask(req: Request, res: Response) {
     throw new AppError(400, "STATUS_INVALID", "Status does not belong to this board.");
   }
 
+  if (selectedStatus.countsAsDone || selectedStatus.category === "CANCELLED") throw new AppError(400, "INITIAL_STATUS_INVALID", "Crea la tarea en un estado de trabajo; el cierre ocurre después de la revisión.");
   const assigneeIds = getUniqueAssigneeIds(req.body.assigneeIds);
 
-  await assertParentTaskBelongsToSameProject(board, req.body.parentTaskId);
-  await assertAssigneesCanWorkOnTask(board, assigneeIds);
+  await assertParentTaskBelongsToSameProject(board, userId, req.body.parentTaskId);
+  const eligiblePeople = await taskPeopleWhere(board.access);
 
+  assertTaskDateRange(req.body);
   const initialCompletedAt = selectedStatus.countsAsDone ? new Date() : undefined;
 
   const task = await prisma.$transaction(async (tx) => {
+    await enrollTaskPeople(tx, board.access, assigneeIds, userId, eligiblePeople);
+    if (req.body.parentTaskId) {
+      const parent = await tx.task.findFirst({ where: { id: req.body.parentTaskId, boardId, deletedAt: null }, include: { status: true } });
+      if (!parent || parent.parentTaskId || parent.status.countsAsDone) throw new AppError(409, "PARENT_TASK_CHANGED", "La tarea principal ya no admite subtareas. Revisa su estado.");
+    }
     const createdTask = await tx.task.create({
       data: {
         workspaceId: board.workspaceId,
@@ -482,7 +452,7 @@ export async function createTask(req: Request, res: Response) {
     });
 
     return createdTask;
-  });
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
   emitRealtimeEvent({
     type: "task.created",
@@ -493,17 +463,18 @@ export async function createTask(req: Request, res: Response) {
     actorId: userId,
     recipientUserIds: assigneeIds,
     visibility: "project",
-    title: req.body.parentTaskId ? "Nueva subtarea" : "Nueva actividad",
+    title: req.body.parentTaskId ? "Nueva subtarea" : "Nueva tarea",
     message: req.body.parentTaskId ? `Se creo la subtarea ${task.title}.` : `Se creo la actividad ${task.title}.`
   });
 
-  res.status(201).json({ task });
+  const access = await assertTaskPermission(userId, task.id, "task.view_all");
+  res.status(201).json({ task: { ...task, capabilities: access.capabilities } });
 }
 
 export async function updateTask(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const taskId = getParam(req, "taskId");
-  const requestedFields = Object.keys(req.body);
+  const requestedFields = Object.keys(req.body).filter((field) => field !== "expectedUpdatedAt");
   const progressOnlyUpdate = requestedFields.length > 0 && requestedFields.every((field) => field === "progress");
   const requiredPermission = progressOnlyUpdate ? "task.update_progress" : "task.update";
   const { task, workspaceMember } = await assertTaskPermission(userId, taskId, requiredPermission);
@@ -513,64 +484,71 @@ export async function updateTask(req: Request, res: Response) {
     title: req.body.title,
     description: req.body.description,
     priority: req.body.priority,
-    startAt: parseOptionalDate(req.body.startAt),
-    dueAt: parseOptionalDate(req.body.dueAt),
-    estimateMinutes: req.body.estimateMinutes,
+    ...resolveTaskPlanning(req.body, task),
     progress: req.body.progress
   };
 
-  const updated = await prisma.task.update({
-    where: { id: task.id },
-    data: taskUpdates,
-    include: {
-      status: true,
-      assignees: {
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatarUrl: true
+  const updated = await prisma.$transaction(async (tx) => {
+    const updatedTask = await tx.task.update({
+      where: { id: task.id, updatedAt: req.body.expectedUpdatedAt ? new Date(req.body.expectedUpdatedAt) : task.updatedAt },
+      data: taskUpdates,
+      include: {
+        status: true,
+        assignees: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true
+              }
             }
           }
-        }
-      },
-      mentions: {
-        include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              avatarUrl: true
+        },
+        mentions: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+                avatarUrl: true
+              }
             }
           }
         }
       }
-    }
-  });
+    });
 
-  await prisma.activityLog.create({
-    data: {
-      workspaceId: task.workspaceId,
-      projectId: task.projectId,
-      taskId: task.id,
-      actorId: userId,
-      entityType: "TASK",
-      entityId: task.id,
-      action: "task.updated",
-      before: auditJson({
-        title: task.title,
-        description: task.description,
-        priority: task.priority,
-        startAt: task.startAt,
-        dueAt: task.dueAt,
-        estimateMinutes: task.estimateMinutes,
-        progress: task.progress
-      }),
-      after: auditJson(taskUpdates)
+    await tx.activityLog.create({
+      data: {
+        workspaceId: task.workspaceId,
+        projectId: task.projectId,
+        taskId: task.id,
+        actorId: userId,
+        entityType: "TASK",
+        entityId: task.id,
+        action: "task.updated",
+        before: auditJson({
+          title: task.title,
+          description: task.description,
+          priority: task.priority,
+          startAt: task.startAt,
+          dueAt: task.dueAt,
+          estimateMinutes: task.estimateMinutes,
+          progress: task.progress
+        }),
+        after: auditJson(taskUpdates)
+      }
+    });
+
+    return updatedTask;
+  }).catch((error: unknown) => {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025") {
+      throw new AppError(409, "TASK_UPDATE_CONFLICT", "La tarea cambió mientras la editabas. Actualiza el tablero y revisa los cambios antes de guardar.");
     }
+    throw error;
   });
 
   emitRealtimeEvent({
@@ -580,17 +558,18 @@ export async function updateTask(req: Request, res: Response) {
     boardId: task.boardId,
     taskId: task.id,
     actorId: userId,
-    title: "Actividad actualizada",
-    message: `Se actualizo ${task.title}.`
+    title: "Tarea actualizada",
+    message: `Se actualizó «${task.title}».`
   });
 
-  res.json({ task: updated });
+  const access = await assertTaskPermission(userId, task.id, "task.view_all");
+  res.json({ task: { ...updated, capabilities: access.capabilities } });
 }
 
 export async function changeTaskStatus(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const taskId = getParam(req, "taskId");
-  const { task, workspaceMember } = await assertTaskStatusChangePermission(userId, taskId);
+  const { task, workspaceMember, capabilities } = await assertTaskStatusChangePermission(userId, taskId);
 
   const targetBoardStatus = await prisma.boardStatus.findFirst({
     where: {
@@ -609,6 +588,10 @@ export async function changeTaskStatus(req: Request, res: Response) {
     targetBoardStatus.countsAsDone
   );
 
+  if (!capabilities.allowedStatusIds.includes(targetBoardStatus.id)) {
+    throw new AppError(403, "TASK_TRANSITION_DENIED", "Tu rol puede reportar el avance y enviar a revisión. El cierre corresponde a coordinación.");
+  }
+
   // completedAt pertenece al cambio de estado, no a updatedAt.
   // Los reportes de terminado deben confiar en este timestamp.
   const completedAt = targetBoardStatus.countsAsDone ? task.completedAt ?? new Date() : clearNullableTimestamp;
@@ -618,8 +601,14 @@ export async function changeTaskStatus(req: Request, res: Response) {
       ? "task.reopened"
       : "task.status_changed";
 
-  const updated = await prisma.task.update({
-    where: { id: task.id },
+  const updated = await prisma.$transaction(async (tx) => {
+    if (targetBoardStatus.countsAsDone) {
+      const pending = await tx.task.count({ where: { parentTaskId: task.id, ...activeRecordFilter,
+        status: { countsAsDone: false, category: { not: "CANCELLED" } } } });
+      if (pending) throw new AppError(409, "SUBTASKS_PENDING", "Completa o cancela las subtareas pendientes antes de cerrar la tarea principal.");
+    }
+    const result = await tx.task.update({
+    where: { id: task.id, updatedAt: task.updatedAt },
     data: {
       statusId: targetBoardStatus.id,
       completedAt
@@ -629,7 +618,7 @@ export async function changeTaskStatus(req: Request, res: Response) {
     }
   });
 
-  await prisma.activityLog.create({
+  await tx.activityLog.create({
     data: {
       workspaceId: task.workspaceId,
       projectId: task.projectId,
@@ -649,6 +638,9 @@ export async function changeTaskStatus(req: Request, res: Response) {
     }
   });
 
+    return result;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
   emitRealtimeEvent({
     type: auditAction,
     workspaceId: task.workspaceId,
@@ -660,7 +652,8 @@ export async function changeTaskStatus(req: Request, res: Response) {
     message: `${task.title} cambio a ${targetBoardStatus.name}.`
   });
 
-  res.json({ task: updated });
+  const access = await assertTaskPermission(userId, task.id, "task.view_all");
+  res.json({ task: { ...updated, capabilities: access.capabilities } });
 }
 
 export async function addTaskAssignee(req: Request, res: Response) {
@@ -674,33 +667,13 @@ export async function addTaskAssignee(req: Request, res: Response) {
     throw new AppError(400, "ASSIGNEE_REQUIRED", "userId is required.");
   }
 
-  const workspaceMembership = await prisma.workspaceMember.findUnique({
-    where: {
-      workspaceId_userId: {
-        workspaceId: task.workspaceId,
-        userId: targetUserId
-      }
-    }
-  });
+  const projectAccess = await assertProjectPermission(userId, task.projectId, 'task.assign');
+  const eligiblePeople = await taskPeopleWhere(projectAccess);
 
-  if (!workspaceMembership || workspaceMembership.status !== "ACTIVE") {
-    throw new AppError(400, "ASSIGNEE_INVALID", "Assignee must be an active workspace member.");
-  }
-
-  const projectMember = await prisma.projectMember.findUnique({
-    where: {
-      projectId_userId: {
-        projectId: task.projectId,
-        userId: targetUserId
-      }
-    }
-  });
-
-  if (!projectMember) {
-    throw new AppError(400, "ASSIGNEE_PROJECT_REQUIRED", "Assignee must belong to the project.");
-  }
-
-  const assignee = await prisma.taskAssignee.upsert({
+  const assignee = await prisma.$transaction(async (tx) => {
+    await enrollTaskPeople(tx, projectAccess, [targetUserId], userId, eligiblePeople);
+    await tx.task.update({ where: { id: task.id, updatedAt: task.updatedAt }, data: { updatedAt: new Date() } });
+  const assignee = await tx.taskAssignee.upsert({
     where: {
       taskId_userId: {
         taskId: task.id,
@@ -715,7 +688,7 @@ export async function addTaskAssignee(req: Request, res: Response) {
     }
   });
 
-  await prisma.activityLog.create({
+  await tx.activityLog.create({
     data: {
       workspaceId: task.workspaceId,
       projectId: task.projectId,
@@ -730,6 +703,9 @@ export async function addTaskAssignee(req: Request, res: Response) {
     }
   });
 
+    return assignee;
+  }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
   emitRealtimeEvent({
     type: "task.assigned",
     workspaceId: task.workspaceId,
@@ -739,8 +715,8 @@ export async function addTaskAssignee(req: Request, res: Response) {
     actorId: userId,
     recipientUserIds: [targetUserId],
     visibility: "project",
-    title: "Asignado agregado",
-    message: `Se agrego un asignado a ${task.title}.`
+    title: "Responsable asignado",
+    message: `Se asignó una persona a «${task.title}».`
   });
 
   res.status(201).json({ assignee });
@@ -758,8 +734,12 @@ export async function mentionTaskUser(req: Request, res: Response) {
   }
 
   await assertMentionedUserBelongsToWorkspace(task.workspaceId, targetUserId);
+  const mentionedProjectMember = await prisma.projectMember.findUnique({ where: { projectId_userId: { projectId: task.projectId, userId: targetUserId } } });
+  if (!mentionedProjectMember) throw new AppError(400, "MENTION_PROJECT_REQUIRED", "Agrega a la persona al proyecto antes de mencionarla.");
 
-  const mention = await prisma.taskMention.upsert({
+  const mention = await prisma.$transaction(async (tx) => {
+    await tx.task.update({ where: { id: task.id, updatedAt: task.updatedAt }, data: { updatedAt: new Date() } });
+  const mention = await tx.taskMention.upsert({
     where: {
       taskId_userId: {
         taskId: task.id,
@@ -786,7 +766,7 @@ export async function mentionTaskUser(req: Request, res: Response) {
     }
   });
 
-  await prisma.activityLog.create({
+  await tx.activityLog.create({
     data: {
       workspaceId: task.workspaceId,
       projectId: task.projectId,
@@ -801,6 +781,9 @@ export async function mentionTaskUser(req: Request, res: Response) {
     }
   });
 
+    return mention;
+  });
+
   emitRealtimeEvent({
     type: "task.mentioned",
     workspaceId: task.workspaceId,
@@ -810,7 +793,7 @@ export async function mentionTaskUser(req: Request, res: Response) {
     actorId: userId,
     recipientUserIds: [targetUserId],
     visibility: "project",
-    title: "Usuario mencionado",
+    title: "Seguimiento compartido",
     message: `Se menciono a ${mention.user.name} en ${task.title}.`
   });
 
@@ -824,14 +807,16 @@ export async function removeTaskAssignee(req: Request, res: Response) {
   const { task, workspaceMember } = await assertTaskPermission(userId, taskId, "task.assign");
   await assertTaskCanStillBeEdited({ completedAt: task.completedAt ?? undefined }, workspaceMember.roleId ?? undefined);
 
-  await prisma.taskAssignee.deleteMany({
+  await prisma.$transaction(async (tx) => {
+    await tx.task.update({ where: { id: task.id, updatedAt: task.updatedAt }, data: { updatedAt: new Date() } });
+  await tx.taskAssignee.deleteMany({
     where: {
       taskId: task.id,
       userId: targetUserId
     }
   });
 
-  await prisma.activityLog.create({
+  await tx.activityLog.create({
     data: {
       workspaceId: task.workspaceId,
       projectId: task.projectId,
@@ -846,6 +831,8 @@ export async function removeTaskAssignee(req: Request, res: Response) {
     }
   });
 
+  });
+
   emitRealtimeEvent({
     type: "task.unassigned",
     workspaceId: task.workspaceId,
@@ -853,7 +840,7 @@ export async function removeTaskAssignee(req: Request, res: Response) {
     boardId: task.boardId,
     taskId: task.id,
     actorId: userId,
-    title: "Asignado removido",
+    title: "Responsable retirado",
     message: `Se removio un asignado de ${task.title}.`
   });
 
@@ -911,8 +898,12 @@ export async function createComment(req: Request, res: Response) {
   }
 
   const encryptedBody = encryptText(req.body.body);
+  const canCommentWhenClosed = await roleHasPermission(workspaceMember.roleId ?? undefined, "workspace.manage");
 
-  const comment = await prisma.comment.create({
+  const comment = await prisma.$transaction(async (tx) => {
+    const writable = await tx.task.updateMany({ where: { id: task.id, deletedAt: null, ...(canCommentWhenClosed ? {} : { status: { countsAsDone: false, category: { not: 'CANCELLED' } } }) }, data: { updatedAt: new Date() } });
+    if (!writable.count) throw new AppError(409, 'TASK_COMMENT_CLOSED', 'La tarea se cerró antes de enviar el mensaje. Tu texto se conserva.');
+  const comment = await tx.comment.create({
     data: {
       taskId: task.id,
       userId,
@@ -931,7 +922,7 @@ export async function createComment(req: Request, res: Response) {
     }
   });
 
-  await prisma.activityLog.create({
+  await tx.activityLog.create({
     data: {
       workspaceId: task.workspaceId,
       projectId: task.projectId,
@@ -944,6 +935,9 @@ export async function createComment(req: Request, res: Response) {
         isInternal: comment.isInternal
       })
     }
+  });
+
+    return comment;
   });
 
   const internalRecipients = comment.isInternal
@@ -959,8 +953,9 @@ export async function createComment(req: Request, res: Response) {
     actorId: userId,
     recipientUserIds: internalRecipients,
     visibility: comment.isInternal ? "recipients" : "project",
-    title: comment.isInternal ? "Comentario interno" : "Nuevo comentario",
-    message: `Se agrego un comentario en ${task.title}.`
+    commentId: comment.id,
+    title: comment.isInternal ? "Mensaje interno" : "Nuevo mensaje",
+    message: `${comment.user.name} escribió en «${task.title}».`
   });
 
   res.status(201).json({
@@ -983,7 +978,9 @@ export async function createTimeLog(req: Request, res: Response) {
   const { task, workspaceMember } = await assertTaskPermission(userId, taskId, "task.log_time");
   await assertTaskCanStillBeEdited({ completedAt: task.completedAt ?? undefined }, workspaceMember.roleId ?? undefined);
 
-  const timeLog = await prisma.timeLog.create({
+  const timeLog = await prisma.$transaction(async (tx) => {
+    await tx.task.update({ where: { id: task.id, updatedAt: task.updatedAt }, data: { updatedAt: new Date() } });
+  const timeLog = await tx.timeLog.create({
     data: {
       taskId: task.id,
       userId,
@@ -1005,7 +1002,7 @@ export async function createTimeLog(req: Request, res: Response) {
     }
   });
 
-  await prisma.activityLog.create({
+  await tx.activityLog.create({
     data: {
       workspaceId: task.workspaceId,
       projectId: task.projectId,
@@ -1019,6 +1016,9 @@ export async function createTimeLog(req: Request, res: Response) {
         logDate: timeLog.logDate
       })
     }
+  });
+
+    return timeLog;
   });
 
   emitRealtimeEvent({
@@ -1108,4 +1108,19 @@ export async function listTaskEvents(req: Request, res: Response) {
         createdAt: event.createdAt
       }))
   });
+}
+
+export async function deleteTask(req: Request,res: Response) {
+  const userId=req.auth!.userId;
+  const {task,workspaceMember}=await assertTaskPermission(userId,getParam(req,'taskId'),'task.delete');
+  await assertTaskCanStillBeEdited({completedAt:task.completedAt??undefined},workspaceMember.roleId??undefined);
+  await prisma.$transaction(async tx=>{
+    const deletedAt=new Date();
+    await tx.task.update({where:{id:task.id,updatedAt:new Date(req.body.expectedUpdatedAt),deletedAt:null},data:{deletedAt}});
+    await tx.task.updateMany({where:{parentTaskId:task.id,deletedAt:null},data:{deletedAt}});
+    await tx.activityLog.create({data:{workspaceId:task.workspaceId,projectId:task.projectId,taskId:task.id,actorId:userId,entityType:'TASK',entityId:task.id,action:'task.deleted'}});
+  });
+  // The event contains no deleted task title and is authorized against current project access.
+  emitRealtimeEvent({type:'task.deleted',workspaceId:task.workspaceId,projectId:task.projectId,boardId:task.boardId,actorId:userId,title:'Tarea eliminada',message:'El tablero del proyecto se actualizó.'});
+  res.status(204).send();
 }

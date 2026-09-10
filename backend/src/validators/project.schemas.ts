@@ -15,7 +15,7 @@ export const createProjectSchema = z.object({
     name: z.string().trim().min(2).max(160),
     description: z.string().trim().max(2000).optional(),
     visibility: z.enum(["WORKSPACE", "PRIVATE"]).default("WORKSPACE"),
-    color: z.string().trim().max(32).optional(),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Usa un color hexadecimal válido.").optional(),
     startDate: dateString,
     endDate: dateString
   })
@@ -32,14 +32,15 @@ export const updateProjectSchema = z.object({
     projectId: uuidParam
   }),
   body: z.object({
+    expectedUpdatedAt: z.string().datetime().optional(),
     areaId: uuidParam.optional(),
-    localityId: uuidParam.optional(),
+    localityId: uuidParam.nullable().optional(),
     name: z.string().trim().min(2).max(160).optional(),
     description: z.string().trim().max(2000).optional(),
     visibility: z.enum(["WORKSPACE", "PRIVATE"]).optional(),
-    color: z.string().trim().max(32).optional(),
-    startDate: dateString,
-    endDate: dateString
+    color: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Usa un color hexadecimal válido.").optional(),
+    startDate: dateString.nullable(),
+    endDate: dateString.nullable()
   })
 });
 

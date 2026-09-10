@@ -1,3 +1,5 @@
+import { useSearchParams } from "react-router-dom";
+import { apiRequest } from "../api/http";
 import { useState } from "react";
 import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +10,7 @@ import {
   rejectStaffingRequest
 } from "../api/endpoints";
 import { queryKeys } from "../lib/queryKeys";
-import type { PaginationMeta, StaffingRequest, StaffingRequestStatus } from "../types";
+import type { Area, Locality, Position, PaginationMeta, StaffingRequest, StaffingRequestStatus } from "../types";
 
 type LoadOptions = {
   silent?: boolean;
@@ -23,6 +25,8 @@ type UseManagementControllerOptions = {
 
 export function useManagementController({ token, workspaceId, enabled, onError }: UseManagementControllerOptions) {
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const linkedRequestId = searchParams.get("request");
   const [staffingRequests, setStaffingRequests] = useState<StaffingRequest[]>([]);
   const [staffingPagination, setStaffingPagination] = useState<Partial<Record<StaffingRequestStatus, PaginationMeta>>>({});
   const [staffingPages, setStaffingPages] = useState<Record<"PENDING" | "APPROVED" | "REJECTED", number>>({
@@ -31,6 +35,8 @@ export function useManagementController({ token, workspaceId, enabled, onError }
     REJECTED: 1
   });
   const staffingPageSize = 8;
+  const catalog = useQuery({ queryKey: ["staffing-catalog", workspaceId], enabled: Boolean(token && workspaceId && enabled),
+    queryFn: () => apiRequest<{ areas: Area[]; localities: Locality[]; positions: Position[] }>(`/staffing-requests/catalog?workspaceId=${workspaceId}`, { token }) });
 
   async function fetchManagement() {
     if (!token || !workspaceId) {
@@ -55,12 +61,14 @@ export function useManagementController({ token, workspaceId, enabled, onError }
       })
     ]);
 
+    const linked = linkedRequestId ? await apiRequest<{ staffingRequests: StaffingRequest[] }>(`/staffing-requests?workspaceId=${workspaceId}&requestId=${encodeURIComponent(linkedRequestId)}`, { token }) : undefined;
+    const rows = [
+        ...pendingResponse.staffingRequests, ...approvedResponse.staffingRequests, ...rejectedResponse.staffingRequests,
+        ...(linked?.staffingRequests ?? [])
+    ];
+    if (linkedRequestId && !linked?.staffingRequests.length) throw new Error("La solicitud ya no está disponible o no tienes acceso a ella.");
     return {
-      staffingRequests: [
-        ...pendingResponse.staffingRequests,
-        ...approvedResponse.staffingRequests,
-        ...rejectedResponse.staffingRequests
-      ],
+      staffingRequests: Array.from(new Map(rows.map(request => [request.id, request])).values()),
       pagination: {
         PENDING: pendingResponse.pagination,
         APPROVED: approvedResponse.pagination,
@@ -70,7 +78,7 @@ export function useManagementController({ token, workspaceId, enabled, onError }
   }
 
   const managementQuery = useQuery({
-    queryKey: queryKeys.management(workspaceId, staffingPages),
+    queryKey: [...queryKeys.management(workspaceId, staffingPages), linkedRequestId],
     queryFn: fetchManagement,
     enabled: Boolean(token && workspaceId && enabled),
     refetchOnMount: "always"
@@ -83,7 +91,7 @@ export function useManagementController({ token, workspaceId, enabled, onError }
 
     try {
       const staffingResponse = await queryClient.fetchQuery({
-        queryKey: queryKeys.management(workspaceId, staffingPages),
+        queryKey: [...queryKeys.management(workspaceId, staffingPages), linkedRequestId],
         queryFn: fetchManagement,
         staleTime: 0
       });
@@ -183,6 +191,7 @@ export function useManagementController({ token, workspaceId, enabled, onError }
   }, [managementQuery.error]);
 
   return {
+    catalog: catalog.data,
     staffingRequests,
     staffingPagination,
     staffingPages,

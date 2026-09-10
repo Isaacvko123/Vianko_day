@@ -1,8 +1,10 @@
-import { FormEvent, useState } from "react";
-import { Building2, LogIn, Plus, RefreshCw, X } from "lucide-react";
-import { Button, EmptyState, LoadingState, PageHeader } from "./ui";
-import type { WorkspaceListItem } from "../types";
-
+import { useState, type FormEvent } from 'react';
+import { ArrowRight, Building2, Plus } from 'lucide-react';
+import { Button, EmptyState, LoadingState } from './ui';
+import { Dialog } from './ui/Dialog';
+import { initials } from '../lib/format';
+import { roleLabel } from '../lib/roles';
+import type { WorkspaceListItem } from '../types';
 type WorkspaceSelectProps = {
   workspaces: WorkspaceListItem[];
   isLoading: boolean;
@@ -18,138 +20,9 @@ type WorkspaceSelectProps = {
   onGoToLogin: () => void;
 };
 
-function readFormString(form: HTMLFormElement, fieldName: string) {
-  const value = new FormData(form).get(fieldName);
-  return typeof value === "string" ? value.trim() : "";
-}
-
-export function WorkspaceSelect({
-  workspaces,
-  isLoading,
-  canCreateWorkspace,
-  onRefresh,
-  onSelect,
-  onCreateWorkspace,
-  onGoToLogin
-}: WorkspaceSelectProps) {
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  async function handleCreateWorkspace(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsSubmitting(true);
-
-    try {
-      const form = event.currentTarget;
-      const defaultAreaName = readFormString(form, "defaultAreaName");
-      const defaultLocalityName = readFormString(form, "defaultLocalityName");
-      const defaultLocalityCode = readFormString(form, "defaultLocalityCode");
-
-      await onCreateWorkspace({
-        name: readFormString(form, "name"),
-        defaultAreaName: defaultAreaName || undefined,
-        defaultLocalityName: defaultLocalityName || undefined,
-        defaultLocalityCode: defaultLocalityCode || undefined
-      });
-      setIsCreateModalOpen(false);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo crear el workspace.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  }
-
-  return (
-    <main className="workspace-shell">
-      <PageHeader
-        eyebrow="Workspace"
-        title="Elige donde vas a trabajar"
-        description="Selecciona la empresa activa para cargar proyectos, tableros, miembros y reportes con los permisos correctos."
-        actions={(
-          <>
-            <Button icon={<LogIn size={17} />} variant="ghost" onClick={onGoToLogin}>Ir a login</Button>
-            <Button icon={<RefreshCw size={17} />} variant="secondary" onClick={onRefresh}>Actualizar</Button>
-            {canCreateWorkspace ? (
-              <Button icon={<Plus size={17} />} variant="primary" onClick={() => setIsCreateModalOpen(true)}>Nuevo workspace</Button>
-            ) : undefined}
-          </>
-        )}
-      />
-
-      {isLoading ? <LoadingState label="Cargando empresas..." rows={3} /> : undefined}
-
-      <section className="workspace-grid">
-        {workspaces.map((workspace) => (
-          <button className="workspace-card" type="button" key={workspace.id} onClick={() => onSelect(workspace)}>
-            <span className="workspace-icon"><Building2 size={24} /></span>
-            <strong>{workspace.name}</strong>
-            <small>{workspace.member.role?.name ?? workspace.member.userType}</small>
-          </button>
-        ))}
-      </section>
-
-      {!isLoading && workspaces.length === 0 ? (
-        <EmptyState
-          icon={<Plus size={24} />}
-          title="No tienes workspaces activos"
-          description="Crea una cuenta nueva desde registro o solicita acceso a una empresa existente."
-          action={canCreateWorkspace ? (
-            <Button icon={<Plus size={17} />} variant="primary" onClick={() => setIsCreateModalOpen(true)}>Crear workspace</Button>
-          ) : undefined}
-        />
-      ) : undefined}
-
-      {isCreateModalOpen ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="task-modal admin-modal" role="dialog" aria-modal="true">
-            <header className="modal-header">
-              <div>
-                <p className="eyebrow">Workspace</p>
-                <h2>Crear nueva empresa</h2>
-              </div>
-              <button className="icon-button" type="button" onClick={() => setIsCreateModalOpen(false)} aria-label="Cerrar modal">
-                <X size={18} />
-              </button>
-            </header>
-
-            {errorMessage ? <p className="form-error">{errorMessage}</p> : undefined}
-
-            <form className="form-stack admin-modal-form" onSubmit={handleCreateWorkspace}>
-              <label className="wide-field">
-                Nombre del workspace
-                <input name="name" placeholder="Ej. Vianko Operaciones Norte" minLength={2} maxLength={120} required />
-              </label>
-              <label>
-                Area inicial
-                <input name="defaultAreaName" placeholder="TI" defaultValue="TI" minLength={2} maxLength={120} />
-              </label>
-              <label>
-                Localidad inicial
-                <input name="defaultLocalityName" placeholder="Guadalajara" defaultValue="Guadalajara" minLength={2} maxLength={120} />
-              </label>
-              <label>
-                Codigo de localidad
-                <input name="defaultLocalityCode" placeholder="GDL" defaultValue="GDL" minLength={2} maxLength={24} />
-              </label>
-              <p className="workspace-create-note">
-                El creador queda como Admin del nuevo workspace. Despues puedes entrar a Miembros para invitar gerentes,
-                crear areas, localidades y puestos propios de esa empresa.
-              </p>
-              <div className="modal-actions">
-                <button className="secondary-action" type="button" onClick={() => setIsCreateModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button className="primary-action" type="submit" disabled={isSubmitting}>
-                  <Plus size={18} />
-                  {isSubmitting ? "Creando..." : "Crear workspace"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      ) : undefined}
-    </main>
-  );
+export function WorkspaceSelect({workspaces,isLoading,canCreateWorkspace,onRefresh,onSelect,onCreateWorkspace,onGoToLogin}:WorkspaceSelectProps){
+ const [creating,setCreating]=useState(false);const [busy,setBusy]=useState(false);const [error,setError]=useState('');
+ async function submit(event:FormEvent<HTMLFormElement>){event.preventDefault();if(busy)return;setBusy(true);setError('');const data=new FormData(event.currentTarget);const read=(key:string)=>String(data.get(key)??'').trim();try{await onCreateWorkspace({name:read('name'),defaultAreaName:read('area')||undefined,defaultLocalityName:read('locality')||undefined,defaultLocalityCode:read('code')||undefined});setCreating(false);}catch(failure){setError(failure instanceof Error?failure.message:'No se pudo crear la empresa.');}finally{setBusy(false);}}
+ return <main className="day-workspaces"><header><span className="day-login-brand"><span>v</span>vianko<strong>day</strong></span><Button variant="ghost" onClick={onGoToLogin}>Cerrar sesión</Button></header><section><p className="day-kicker">Ya estás dentro</p><h1>¿Con qué equipo<br/>trabajamos hoy?</h1><p>Elige una empresa para entrar a tu trabajo.</p>{isLoading&&<LoadingState label="Cargando tus empresas…" rows={2}/>}<div className="day-workspace-list">{workspaces.map(workspace=><button key={workspace.id} onClick={()=>onSelect(workspace)}><span>{initials(workspace.name)}</span><div><strong>{workspace.name}</strong><small>{roleLabel(workspace.member.role)}{workspace.member.area&&` · ${workspace.member.area.name}`}</small></div><ArrowRight size={19}/></button>)}</div>{!isLoading&&!workspaces.length&&<EmptyState icon={<Building2 size={25}/>} title="Tu acceso está por comenzar" description="Abre el enlace de invitación que te compartió el responsable de tu empresa."/>}<footer>{canCreateWorkspace&&<Button variant="ghost" icon={<Plus size={16}/>} onClick={()=>{setError('');setCreating(true);}}>Crear empresa</Button>}<Button variant="ghost" onClick={onRefresh}>Actualizar accesos</Button></footer></section>
+ {creating&&<Dialog title="Comienza un nuevo equipo" description="Crea la empresa y su primera área. Después podrás invitar personas." busy={busy} onClose={()=>setCreating(false)}><form className="product-form" onSubmit={submit}><label>Nombre de la empresa<input data-autofocus name="name" required minLength={2} maxLength={120} placeholder="Ej. Vianko Operaciones"/></label><label>Primera área<input name="area" defaultValue="Operaciones" minLength={2} maxLength={120}/></label><div className="form-two-columns"><label>Localidad inicial<input name="locality" required minLength={2} maxLength={120} placeholder="Ej. Guadalajara"/></label><label>Código de localidad<input name="code" required minLength={2} maxLength={24} placeholder="Ej. GDL"/></label></div><p className="scope-note">Tendrás el rol Administrador en esta empresa. Los accesos de otras empresas se conservan separados.</p>{error&&<p className="form-error" role="alert">{error}</p>}<footer className="product-form-actions"><Button disabled={busy} onClick={()=>setCreating(false)}>Cancelar</Button><Button type="submit" variant="primary" disabled={busy}>{busy?'Creando…':'Crear empresa'}</Button></footer></form></Dialog>}</main>;
 }

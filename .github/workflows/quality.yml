@@ -35,7 +35,7 @@ jobs:
         run: npm test
 
   frontend:
-    name: Frontend build
+    name: Frontend build and tests
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -56,3 +56,6 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test

@@ -1,3 +1,5 @@
+import { startChatExpiry } from './services/project-chat.service.js';
+import { startPushDelivery } from "./services/push-delivery.service.js";
 import http from "node:http";
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
@@ -13,6 +15,8 @@ async function startServer() {
   const app = createApp();
   server = http.createServer(app);
   initializeRealtime(server);
+  startPushDelivery();
+  startChatExpiry();
 
   server.requestTimeout = 30_000;
   server.headersTimeout = 35_000;

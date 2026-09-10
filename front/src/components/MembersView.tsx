@@ -1,23 +1,22 @@
-import { FormEvent, useMemo, useState } from "react";
-import {
-  BriefcaseBusiness,
-  Building2,
-  Check,
-  ClipboardList,
-  MailPlus,
-  MapPin,
-  Network,
-  RefreshCw,
-  ShieldCheck,
-  UserCheck,
-  UserPlus,
-  UsersRound,
-  X
-} from "lucide-react";
-import type { Area, Locality, Position, Project, Role, UserType, WorkspaceMember } from "../types";
-import { initials } from "../lib/format";
-
-type MembersViewProps = {
+import { useMemo, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Check, Copy, Plus, ArrowRight, MapPin, MailPlus, Search, ShieldCheck, UsersRound } from 'lucide-react';
+import type { Area, Locality, Position, Project, Role, UserType, WorkspaceMember } from '../types';
+import { initials } from '../lib/format';
+import { availableRoles, roleLabel, roleSummary } from '../lib/roles';
+import { Button, EmptyState, LoadingState } from './ui';
+import { Dialog } from './ui/Dialog';
+import { InvitationsList } from './InvitationsList';
+import { useQueryClient } from '@tanstack/react-query';
+export type MembersViewProps = {
+  token: string;
+  workspaceId: string;
+  workspacePermissions: string[];
+  currentUserId: string;
+  currentAreaId?: string;
+  currentLocalityIds: string[];
+  onRoles?: () => void;
+  onAssign?: (userId: string) => void;
   members: WorkspaceMember[];
   pendingMembers: WorkspaceMember[];
   roles: Role[];
@@ -52,747 +51,107 @@ type MembersViewProps = {
     areaId?: string;
     localityId?: string;
     localityIds?: string[];
-    positionId?: string;
+    positionId?: string | null;
     userType?: UserType;
   }) => Promise<void>;
   onUpdateMember: (input: {
     memberId: string;
+    expectedUpdatedAt?: string;
     roleId?: string;
     areaId?: string;
     localityId?: string;
     localityIds?: string[];
-    positionId?: string;
+    positionId?: string | null;
     userType?: UserType;
   }) => Promise<void>;
 };
 
-type MembersPanel = "directory" | "structure" | "pending";
-type MembersModal = "none" | "invite" | "area" | "locality" | "position" | "edit-member";
 
-function readFormString(form: HTMLFormElement, fieldName: string) {
-  const value = new FormData(form).get(fieldName);
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function readFormStringList(form: HTMLFormElement, fieldName: string) {
-  return new FormData(form)
-    .getAll(fieldName)
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
-}
-
-function readFormBoolean(form: HTMLFormElement, fieldName: string) {
-  return new FormData(form).get(fieldName) === "on";
-}
-
-function positionsForArea(positions: Position[], areaId: string) {
-  return areaId ? positions.filter((position) => position.areaId === areaId) : positions;
-}
-
-function localitiesForArea(localities: Locality[], areaId: string) {
-  return areaId ? localities.filter((locality) => locality.areaId === areaId) : localities;
-}
-
-function memberLocalityScopeText(member: WorkspaceMember) {
-  const scopedLocalities = member.localityScopes?.map((scope) => scope.locality.name) ?? [];
-
-  if (scopedLocalities.length > 1) {
-    return `Alcance: ${scopedLocalities.join(", ")}`;
+export function MembersView(props: MembersViewProps) {
+  const { members, pendingMembers, roles, areas, localities, positions, projects, currentUserId, workspacePermissions, currentAreaId, currentLocalityIds } = props;
+  const queryClient = useQueryClient();
+  const [params, setParams] = useSearchParams();
+  const [search, setSearch] = useState('');
+  const [panel, setPanel] = useState<'active' | 'pending' | 'invitations'>('active');
+  const [modal, setModal] = useState<'invite' | 'edit' | 'approve'>();
+  const [member, setMember] = useState<WorkspaceMember>();
+  const [type, setType] = useState<UserType>('INTERNAL');
+  const [roleId, setRoleId] = useState('');
+  const [areaId, setAreaId] = useState('');
+  const [localityIds, setLocalityIds] = useState<string[]>([]);
+  const [positionId, setPositionId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [inviteUrl, setInviteUrl] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [step, setStep] = useState(0);
+  const [email, setEmail] = useState('');
+  const [inviteProject, setInviteProject] = useState('');
+  const has = (key: string) => workspacePermissions.includes(key);
+  const canManage = has('member.manage') || has('area.approve_members');
+  const choices = availableRoles(roles, type, member?.roleId);
+  const chosenRole = roles.find(role => role.id === roleId);
+  const roleFilter = params.get('role') ?? '';
+  const activeMembers = members.filter(item => item.status === 'ACTIVE');
+  const shown = useMemo(() => (panel === 'pending' ? pendingMembers : activeMembers).filter(item =>
+    (!roleFilter || item.roleId === roleFilter) && `${item.user.name} ${item.user.email} ${item.area?.name ?? ''}`.toLocaleLowerCase('es').includes(search.trim().toLocaleLowerCase('es'))), [panel, pendingMembers, activeMembers, roleFilter, search]);
+  function open(next: typeof modal, item?: WorkspaceMember) {
+    setMember(item); setType(item?.userType ?? 'INTERNAL'); setAreaId(item?.areaId ?? currentAreaId ?? areas[0]?.id ?? '');
+    setRoleId(item?.roleId ?? roles.find(role => role.name === 'Colaborador')?.id ?? '');
+    setLocalityIds(item ? item.localityScopes?.map(scope => scope.localityId) ?? (item.localityId ? [item.localityId] : []) : currentLocalityIds);
+    setPositionId(item?.positionId ?? ''); setError(''); setInviteUrl(''); setCopied(false); setStep(next === 'invite' ? 0 : 1); setEmail(item?.user.email ?? ''); setInviteProject(''); setModal(next);
   }
-
-  return member.locality?.name ?? scopedLocalities[0] ?? "Sin localidad";
-}
-
-function roleTone(roleName: string) {
-  const normalizedRole = roleName.toLowerCase();
-
-  if (normalizedRole.includes("admin")) return "role-admin";
-  if (normalizedRole.includes("gerente")) return "role-manager";
-  if (normalizedRole.includes("developer")) return "role-dev";
-  if (normalizedRole.includes("externo")) return "role-external";
-  return "role-default";
-}
-
-export function MembersView({
-  members,
-  pendingMembers,
-  roles,
-  areas,
-  localities,
-  positions,
-  projects,
-  isLoading,
-  onRefresh,
-  onInviteUser,
-  onCreateArea,
-  onCreateLocality,
-  onCreatePosition,
-  onApproveMember,
-  onUpdateMember
-}: MembersViewProps) {
-  const [activePanel, setActivePanel] = useState<MembersPanel>("directory");
-  const [activeModal, setActiveModal] = useState<MembersModal>("none");
-  const [inviteToken, setInviteToken] = useState("");
-  const [inviteAreaId, setInviteAreaId] = useState("");
-  const [selectedMember, setSelectedMember] = useState<WorkspaceMember>();
-  const [editAreaId, setEditAreaId] = useState("");
-  const [localityAreaId, setLocalityAreaId] = useState("");
-  const [positionAreaId, setPositionAreaId] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
-  const [isInviting, setIsInviting] = useState(false);
-  const [isSavingStructure, setIsSavingStructure] = useState(false);
-
-  const invitePositions = positionsForArea(positions, inviteAreaId);
-  const inviteLocalities = localitiesForArea(localities, inviteAreaId);
-  const selectedMemberAreaId = editAreaId || selectedMember?.areaId || "";
-  const selectedMemberPositions = positionsForArea(positions, selectedMemberAreaId);
-  const selectedMemberLocalities = localitiesForArea(localities, selectedMemberAreaId);
-  const newLocalityAreaId = localityAreaId || areas[0]?.id || "";
-  const newPositionAreaId = positionAreaId || areas[0]?.id || "";
-  const activeMembers = useMemo(() => members.filter((member) => member.status === "ACTIVE"), [members]);
-
-  function closeModal() {
-    setActiveModal("none");
-    setSelectedMember(undefined);
-    setEditAreaId("");
+  function changeType(next: UserType) {
+    setType(next);
+    const safe = availableRoles(roles, next, member?.roleId);
+    if (!safe.some(role => role.id === roleId)) setRoleId(safe.find(role => role.name === (next === 'EXTERNAL' ? 'Invitado externo' : 'Colaborador'))?.id ?? safe[0]?.id ?? '');
   }
-
-  async function handleInvite(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setInviteToken("");
-    setErrorMessage("");
-    setIsInviting(true);
-
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setError('');
+    if (step < 2) { setStep(step + 1); return; }
+    setBusy(true);
     try {
-      const form = event.currentTarget;
-      const roleId = readFormString(form, "roleId");
-      const areaId = readFormString(form, "areaId");
-      const localityIds = readFormStringList(form, "localityIds");
-      const localityId = localityIds[0] ?? "";
-      const positionId = readFormString(form, "positionId");
-      const projectId = readFormString(form, "projectId");
-      const token = await onInviteUser({
-        email: readFormString(form, "email"),
-        userType: readFormString(form, "userType") === "EXTERNAL" ? "EXTERNAL" : "INTERNAL",
-        roleId: roleId || undefined,
-        areaId: areaId || undefined,
-        localityId: localityId || undefined,
-        localityIds: localityIds.length > 0 ? localityIds : undefined,
-        positionId: positionId || undefined,
-        projectId: projectId || undefined,
-        expiresInDays: Number(readFormString(form, "expiresInDays") || 7)
-      });
-
-      setInviteToken(token);
-      form.reset();
-      setInviteAreaId("");
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo invitar al usuario.");
-    } finally {
-      setIsInviting(false);
-    }
+      if (!areaId || !roleId) throw new Error('Selecciona un área y un rol para continuar.');
+      const input = { userType: type, roleId, areaId, localityIds, positionId: positionId || null };
+      if (modal === 'invite') {
+        const token = await props.onInviteUser({ ...input, positionId: positionId || undefined, email: email.trim(), expiresInDays: 7,
+          projectId: inviteProject || undefined });
+        void queryClient.invalidateQueries({ queryKey: ["invitations", props.workspaceId] });
+        setInviteUrl(`${window.location.origin}/join?token=${encodeURIComponent(token)}`);
+      } else if (member) {
+        if (modal === 'approve') await props.onApproveMember({ ...input, memberId: member.id });
+        else await props.onUpdateMember({ ...input, memberId: member.id, expectedUpdatedAt: member.updatedAt });
+        setModal(undefined);
+      }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'No se pudo guardar el acceso.'); }
+    finally { setBusy(false); }
   }
-
-  async function handleCreateArea(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsSavingStructure(true);
-
-    try {
-      const form = event.currentTarget;
-      const description = readFormString(form, "description");
-      await onCreateArea({
-        name: readFormString(form, "name"),
-        description: description || undefined
-      });
-      form.reset();
-      closeModal();
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo crear el area.");
-    } finally {
-      setIsSavingStructure(false);
-    }
-  }
-
-  async function handleCreateLocality(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsSavingStructure(true);
-
-    try {
-      const form = event.currentTarget;
-      const description = readFormString(form, "description");
-      await onCreateLocality({
-        areaId: readFormString(form, "areaId") || undefined,
-        name: readFormString(form, "name"),
-        code: readFormString(form, "code"),
-        description: description || undefined
-      });
-      form.reset();
-      setLocalityAreaId("");
-      closeModal();
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo crear la localidad.");
-    } finally {
-      setIsSavingStructure(false);
-    }
-  }
-
-  async function handleCreatePosition(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsSavingStructure(true);
-
-    try {
-      const form = event.currentTarget;
-      const description = readFormString(form, "description");
-      await onCreatePosition({
-        areaId: readFormString(form, "areaId") || undefined,
-        name: readFormString(form, "name"),
-        description: description || undefined,
-        isManager: readFormBoolean(form, "isManager")
-      });
-      form.reset();
-      setPositionAreaId("");
-      closeModal();
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo crear el puesto.");
-    } finally {
-      setIsSavingStructure(false);
-    }
-  }
-
-  async function handleApproveMember(event: FormEvent<HTMLFormElement>, memberId: string) {
-    event.preventDefault();
-    setErrorMessage("");
-
-    try {
-      const form = event.currentTarget;
-      const roleId = readFormString(form, "roleId");
-      const areaId = readFormString(form, "areaId");
-      const localityIds = readFormStringList(form, "localityIds");
-      const localityId = localityIds[0] ?? "";
-      const positionId = readFormString(form, "positionId");
-      await onApproveMember({
-        memberId,
-        roleId: roleId || undefined,
-        areaId: areaId || undefined,
-        localityId: localityId || undefined,
-        localityIds: localityIds.length > 0 ? localityIds : undefined,
-        positionId: positionId || undefined,
-        userType: readFormString(form, "userType") === "EXTERNAL" ? "EXTERNAL" : "INTERNAL"
-      });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo aprobar al usuario.");
-    }
-  }
-
-  async function handleUpdateMember(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-
-    if (!selectedMember) {
-      return;
-    }
-
-    try {
-      const form = event.currentTarget;
-      const roleId = readFormString(form, "roleId");
-      const areaId = readFormString(form, "areaId");
-      const localityIds = readFormStringList(form, "localityIds");
-      const localityId = localityIds[0] ?? "";
-      const positionId = readFormString(form, "positionId");
-      await onUpdateMember({
-        memberId: selectedMember.id,
-        roleId: roleId || undefined,
-        areaId: areaId || undefined,
-        localityId: localityId || undefined,
-        localityIds: localityIds.length > 0 ? localityIds : undefined,
-        positionId: positionId || undefined,
-        userType: readFormString(form, "userType") === "EXTERNAL" ? "EXTERNAL" : "INTERNAL"
-      });
-      closeModal();
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo actualizar el miembro.");
-    }
-  }
-
-  return (
-    <section className="page members-page">
-      <header className="page-heading members-hero">
-        <div>
-          <p className="eyebrow">Miembros</p>
-          <h1>Personas, areas y accesos</h1>
-          <p className="hero-copy">Administra estructura, invitaciones y aprobaciones sin mezclar permisos con trabajo operativo.</p>
-        </div>
-        <div className="header-actions">
-          <button className="ghost-button" type="button" onClick={onRefresh}>
-            <RefreshCw size={17} />
-            Actualizar
-          </button>
-          <button className="primary-action" type="button" onClick={() => setActiveModal("invite")}>
-            <UserPlus size={18} />
-            Invitar
-          </button>
-        </div>
-      </header>
-
-      {errorMessage ? <p className="form-error">{errorMessage}</p> : undefined}
-
-      <section className="admin-overview admin-overview-rich">
-        <article>
-          <Building2 size={18} />
-          <span>Areas</span>
-          <strong>{areas.length}</strong>
-        </article>
-        <article>
-          <MapPin size={18} />
-          <span>Localidades</span>
-          <strong>{localities.length}</strong>
-        </article>
-        <article>
-          <BriefcaseBusiness size={18} />
-          <span>Puestos</span>
-          <strong>{positions.length}</strong>
-        </article>
-        <article>
-          <UsersRound size={18} />
-          <span>Activos</span>
-          <strong>{activeMembers.length}</strong>
-        </article>
-        <article>
-          <UserCheck size={18} />
-          <span>Pendientes</span>
-          <strong>{pendingMembers.length}</strong>
-        </article>
-      </section>
-
-      <section className="member-command-grid">
-        <button className="command-card command-primary" type="button" onClick={() => setActiveModal("invite")}>
-          <span><MailPlus size={20} /></span>
-          <strong>Invitar usuario</strong>
-          <small>Interno, externo, gerente o lider con area y puesto.</small>
-        </button>
-        <button className="command-card" type="button" onClick={() => setActiveModal("area")}>
-          <span><Building2 size={20} /></span>
-          <strong>Nueva area</strong>
-          <small>Define el departamento que podra tener gerencia.</small>
-        </button>
-        <button className="command-card" type="button" onClick={() => setActiveModal("locality")}>
-          <span><MapPin size={20} /></span>
-          <strong>Nueva localidad</strong>
-          <small>Conecta area con ciudad, sucursal o zona.</small>
-        </button>
-        <button className="command-card" type="button" onClick={() => setActiveModal("position")}>
-          <span><BriefcaseBusiness size={20} /></span>
-          <strong>Nuevo puesto</strong>
-          <small>Marca si puede aprobar personal del area.</small>
-        </button>
-      </section>
-
-      <section className="control-tabs" aria-label="Vistas de miembros">
-        <button className={activePanel === "directory" ? "active" : ""} type="button" onClick={() => setActivePanel("directory")}>
-          <UsersRound size={16} />
-          Directorio
-        </button>
-        <button className={activePanel === "structure" ? "active" : ""} data-guide="members-structure-tab" type="button" onClick={() => setActivePanel("structure")}>
-          <Network size={16} />
-          Estructura
-        </button>
-        <button className={activePanel === "pending" ? "active" : ""} data-guide="members-pending-tab" type="button" onClick={() => setActivePanel("pending")}>
-          <ClipboardList size={16} />
-          Pendientes
-          {pendingMembers.length > 0 ? <span>{pendingMembers.length}</span> : undefined}
-        </button>
-      </section>
-
-      {activePanel === "directory" ? (
-        <section className="people-shell">
-          <section className="people-grid">
-            {isLoading ? <div className="empty-state">Cargando miembros...</div> : undefined}
-            {members.map((member) => {
-              const roleName = member.role?.name ?? "Sin rol";
-
-              return (
-                <article className="member-card member-card-pro" key={member.id}>
-                  <span>{initials(member.user.name)}</span>
-                  <div>
-                    <strong>{member.user.name}</strong>
-                    <small>{member.user.email}</small>
-                    <small>{member.area?.name ?? "Sin area"} · {memberLocalityScopeText(member)} · {member.position?.name ?? "Sin puesto"}</small>
-                  </div>
-                  <em>{member.userType}</em>
-                  <strong className={`member-role ${roleTone(roleName)}`}><ShieldCheck size={14} /> {roleName}</strong>
-                  <button
-                    className="ghost-button member-edit-button"
-                    type="button"
-                    onClick={() => {
-                      setSelectedMember(member);
-                      setEditAreaId(member.areaId ?? "");
-                      setActiveModal("edit-member");
-                    }}
-                  >
-                    Editar
-                  </button>
-                </article>
-              );
-            })}
-            {!isLoading && members.length === 0 ? <div className="empty-state">Sin miembros visibles.</div> : undefined}
-          </section>
-        </section>
-      ) : undefined}
-
-      {activePanel === "structure" ? (
-        <section className="structure-map">
-          {areas.map((area) => {
-            const areaLocalities = localitiesForArea(localities, area.id);
-            const areaPositions = positionsForArea(positions, area.id);
-            const areaMembers = members.filter((member) => member.areaId === area.id).length;
-
-            return (
-              <article className="structure-card structure-card-pro" key={area.id}>
-                <header>
-                  <div>
-                    <strong>{area.name}</strong>
-                    <small>{areaMembers} miembro(s) · {areaLocalities.length} localidad(es)</small>
-                  </div>
-                  {area.isDefault ? <em>Default</em> : undefined}
-                </header>
-                <div className="structure-columns">
-                  <section>
-                    <span><MapPin size={14} /> Localidades</span>
-                    <p>{areaLocalities.map((locality) => locality.name).join(", ") || "Sin localidades"}</p>
-                  </section>
-                  <section>
-                    <span><BriefcaseBusiness size={14} /> Puestos</span>
-                    <p>{areaPositions.map((position) => position.name).join(", ") || "Sin puestos"}</p>
-                  </section>
-                </div>
-              </article>
-            );
-          })}
-          {areas.length === 0 ? <div className="empty-state">Crea la primera area para ordenar usuarios, puestos y localidades.</div> : undefined}
-        </section>
-      ) : undefined}
-
-      {activePanel === "pending" ? (
-        <section className="approval-panel approval-panel-pro">
-          <h2><UserCheck size={18} /> Pendientes de aprobacion</h2>
-          {pendingMembers.map((member) => (
-            <article className="approval-card approval-card-pro" key={member.id}>
-              <div className="member-card compact">
-                <span>{initials(member.user.name)}</span>
-                <div>
-                  <strong>{member.user.name}</strong>
-                  <small>{member.user.email}</small>
-                  <small>{member.area?.name ?? "Sin area"} · {memberLocalityScopeText(member)} · {member.position?.name ?? "Sin puesto"}</small>
-                </div>
-                <em>{member.userType}</em>
-              </div>
-              <form className="approval-form" onSubmit={(event) => void handleApproveMember(event, member.id)}>
-                <select name="roleId" defaultValue={member.roleId ?? ""}>
-                  <option value="">Rol default</option>
-                  {roles.map((role) => (
-                    <option key={role.id} value={role.id}>{role.name}</option>
-                  ))}
-                </select>
-                <select name="areaId" defaultValue={member.areaId ?? ""}>
-                  <option value="">Area original</option>
-                  {areas.map((area) => (
-                    <option key={area.id} value={area.id}>{area.name}</option>
-                  ))}
-                </select>
-                <select name="localityIds" defaultValue={member.localityScopes?.map((scope) => scope.localityId) ?? (member.localityId ? [member.localityId] : [])} multiple>
-                  {localitiesForArea(localities, member.areaId ?? "").map((locality) => (
-                    <option key={locality.id} value={locality.id}>{locality.name}</option>
-                  ))}
-                </select>
-                <select name="positionId" defaultValue={member.positionId ?? ""}>
-                  <option value="">Puesto original</option>
-                  {positionsForArea(positions, member.areaId ?? "").map((position) => (
-                    <option key={position.id} value={position.id}>{position.name}</option>
-                  ))}
-                </select>
-                <select name="userType" defaultValue={member.userType}>
-                  <option value="INTERNAL">Interno</option>
-                  <option value="EXTERNAL">Externo</option>
-                </select>
-                <button className="primary-action" type="submit">
-                  <UserCheck size={17} />
-                  Aprobar
-                </button>
-              </form>
-            </article>
-          ))}
-          {!isLoading && pendingMembers.length === 0 ? <div className="empty-state">No hay registros pendientes por aprobar.</div> : undefined}
-        </section>
-      ) : undefined}
-
-      {activeModal !== "none" ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="task-modal admin-modal" role="dialog" aria-modal="true">
-            <header className="modal-header">
-              <div>
-                <p className="eyebrow">{activeModal === "invite" || activeModal === "edit-member" ? "Acceso" : "Estructura"}</p>
-                <h2>
-                  {activeModal === "invite" ? "Invitar usuario" : undefined}
-                  {activeModal === "edit-member" ? "Editar miembro" : undefined}
-                  {activeModal === "area" ? "Crear area" : undefined}
-                  {activeModal === "locality" ? "Crear localidad" : undefined}
-                  {activeModal === "position" ? "Crear puesto" : undefined}
-                </h2>
-              </div>
-              <button className="icon-button" type="button" onClick={closeModal} aria-label="Cerrar modal">
-                <X size={18} />
-              </button>
-            </header>
-
-            {activeModal === "invite" ? (
-              <form className="form-stack admin-modal-form" onSubmit={handleInvite}>
-                <label>
-                  Correo
-                  <input name="email" type="email" required placeholder="usuario@empresa.com" />
-                </label>
-                <label>
-                  Tipo
-                  <select name="userType" defaultValue="INTERNAL">
-                    <option value="INTERNAL">Interno</option>
-                    <option value="EXTERNAL">Externo</option>
-                  </select>
-                </label>
-                <label>
-                  Area
-                  <small>Admin ve todas; gerente trabaja solamente con su area.</small>
-                  <select name="areaId" value={inviteAreaId} onChange={(event) => setInviteAreaId(event.currentTarget.value)}>
-                    <option value="">Mi area</option>
-                    {areas.map((area) => (
-                      <option key={area.id} value={area.id}>{area.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Localidades de alcance
-                  <small>Para gerentes puedes elegir varias. Si no eliges, backend usa tu localidad permitida.</small>
-                  <select name="localityIds" key={inviteAreaId} defaultValue={[]} multiple>
-                    {inviteLocalities.map((locality) => (
-                      <option key={locality.id} value={locality.id}>{locality.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Puesto
-                  <small>Los puestos disponibles dependen del area seleccionada.</small>
-                  <select name="positionId" key={inviteAreaId} defaultValue="">
-                    <option value="">Sin puesto</option>
-                    {invitePositions.map((position) => (
-                      <option key={position.id} value={position.id}>{position.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Rol
-                  <select name="roleId" defaultValue="">
-                    <option value="">Rol default</option>
-                    {roles.map((role) => (
-                      <option key={role.id} value={role.id}>{role.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Proyecto para externo
-                  <select name="projectId" defaultValue="">
-                    <option value="">Sin proyecto</option>
-                    {projects.map((project) => (
-                      <option key={project.id} value={project.id}>{project.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Vigencia
-                  <input name="expiresInDays" type="number" min={1} max={30} defaultValue={7} />
-                </label>
-                {inviteToken ? <p className="token-box">Token local: {inviteToken}</p> : undefined}
-                <div className="modal-actions">
-                  <button className="secondary-action" type="button" onClick={closeModal}>Cerrar</button>
-                  <button className="primary-action" type="submit" disabled={isInviting}>
-                    <MailPlus size={18} />
-                    {isInviting ? "Invitando..." : "Enviar invitacion"}
-                  </button>
-                </div>
-              </form>
-            ) : undefined}
-
-            {activeModal === "edit-member" && selectedMember ? (
-              <form className="form-stack admin-modal-form" onSubmit={handleUpdateMember}>
-                <div className="member-card compact wide-field">
-                  <span>{initials(selectedMember.user.name)}</span>
-                  <div>
-                    <strong>{selectedMember.user.name}</strong>
-                    <small>{selectedMember.user.email}</small>
-                    <small>{memberLocalityScopeText(selectedMember)}</small>
-                  </div>
-                  <em>{selectedMember.userType}</em>
-                </div>
-                <label>
-                  Rol
-                  <select name="roleId" defaultValue={selectedMember.roleId ?? ""}>
-                    <option value="">Rol default</option>
-                    {roles.map((role) => (
-                      <option key={role.id} value={role.id}>{role.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Tipo
-                  <select name="userType" defaultValue={selectedMember.userType}>
-                    <option value="INTERNAL">Interno</option>
-                    <option value="EXTERNAL">Externo</option>
-                  </select>
-                </label>
-                <label>
-                  Area
-                  <select
-                    name="areaId"
-                    value={selectedMemberAreaId}
-                    onChange={(event) => setEditAreaId(event.currentTarget.value)}
-                  >
-                    <option value="">Sin area</option>
-                    {areas.map((area) => (
-                      <option key={area.id} value={area.id}>{area.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Localidades de alcance
-                  <small>Un gerente puede tener varias localidades. Un colaborador normalmente usa solo una.</small>
-                  <select
-                    name="localityIds"
-                    key={`${selectedMember.id}-${selectedMemberAreaId}`}
-                    defaultValue={selectedMember.localityScopes?.map((scope) => scope.localityId) ?? (selectedMember.localityId ? [selectedMember.localityId] : [])}
-                    multiple
-                  >
-                    {selectedMemberLocalities.map((locality) => (
-                      <option key={locality.id} value={locality.id}>{locality.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Puesto
-                  <select name="positionId" key={`${selectedMember.id}-${selectedMemberAreaId}-position`} defaultValue={selectedMember.positionId ?? ""}>
-                    <option value="">Sin puesto</option>
-                    {selectedMemberPositions.map((position) => (
-                      <option key={position.id} value={position.id}>{position.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <div className="modal-actions">
-                  <button className="secondary-action" type="button" onClick={closeModal}>Cancelar</button>
-                  <button className="primary-action" type="submit">
-                    <Check size={17} />
-                    Guardar accesos
-                  </button>
-                </div>
-              </form>
-            ) : undefined}
-
-            {activeModal === "area" ? (
-              <form className="form-stack admin-modal-form single" onSubmit={handleCreateArea}>
-                <label>
-                  Nombre
-                  <input name="name" minLength={2} required placeholder="Operaciones" />
-                </label>
-                <label>
-                  Descripcion
-                  <textarea name="description" rows={4} placeholder="Responsabilidad principal del area" />
-                </label>
-                <div className="modal-actions">
-                  <button className="secondary-action" type="button" onClick={closeModal}>Cancelar</button>
-                  <button className="primary-action" type="submit" disabled={isSavingStructure}>
-                    <Check size={17} />
-                    Guardar area
-                  </button>
-                </div>
-              </form>
-            ) : undefined}
-
-            {activeModal === "locality" ? (
-              <form className="form-stack admin-modal-form single" onSubmit={handleCreateLocality}>
-                <label>
-                  Area
-                  <small>Admin y Lider TI pueden crear localidades; el area queda ligada al catalogo.</small>
-                  <select
-                    name="areaId"
-                    value={newLocalityAreaId}
-                    onChange={(event) => setLocalityAreaId(event.currentTarget.value)}
-                    required
-                  >
-                    {areas.map((area) => (
-                      <option key={area.id} value={area.id}>{area.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Nombre
-                  <input name="name" minLength={2} required placeholder="Guadalajara" />
-                </label>
-                <label>
-                  Codigo
-                  <input name="code" minLength={2} required placeholder="GDL" />
-                </label>
-                <label>
-                  Descripcion
-                  <textarea name="description" rows={4} placeholder="Sucursal, ciudad o zona operativa" />
-                </label>
-                <div className="modal-actions">
-                  <button className="secondary-action" type="button" onClick={closeModal}>Cancelar</button>
-                  <button className="primary-action" type="submit" disabled={isSavingStructure}>
-                    <Check size={17} />
-                    Guardar localidad
-                  </button>
-                </div>
-              </form>
-            ) : undefined}
-
-            {activeModal === "position" ? (
-              <form className="form-stack admin-modal-form single" onSubmit={handleCreatePosition}>
-                <label>
-                  Area
-                  <small>Gerentes solo pueden crear puestos para su propia area.</small>
-                  <select
-                    name="areaId"
-                    value={newPositionAreaId}
-                    onChange={(event) => setPositionAreaId(event.currentTarget.value)}
-                    required
-                  >
-                    {areas.map((area) => (
-                      <option key={area.id} value={area.id}>{area.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  Puesto
-                  <input name="name" minLength={2} required placeholder="Gerente de operaciones" />
-                </label>
-                <label>
-                  Descripcion
-                  <textarea name="description" rows={4} placeholder="Alcance del puesto" />
-                </label>
-                <label className="inline-check">
-                  <input name="isManager" type="checkbox" />
-                  Puede aprobar personal
-                </label>
-                <div className="modal-actions">
-                  <button className="secondary-action" type="button" onClick={closeModal}>Cancelar</button>
-                  <button className="primary-action" type="submit" disabled={isSavingStructure}>
-                    <Check size={17} />
-                    Guardar puesto
-                  </button>
-                </div>
-              </form>
-            ) : undefined}
-          </section>
-        </div>
-      ) : undefined}
-    </section>
-  );
+  return <section className="page product-page">
+    <header className="product-heading"><div><p className="eyebrow">Equipo</p><h1>Personas</h1><p>Invita a tu equipo y asigna a cada persona un rol y un área.</p></div>{has('workspace.invite_users') && <Button variant="primary" icon={<MailPlus size={17} />} onClick={() => open('invite')}>Invitar persona</Button>}</header>
+    <div className="product-toolbar"><div className="product-tabs" aria-label="Estado de personas"><button className={panel === 'active' ? 'active' : ''} onClick={() => setPanel('active')}>Equipo <span>{activeMembers.length}</span></button>{has('workspace.invite_users') && <button className={panel === 'invitations' ? 'active' : ''} onClick={() => setPanel('invitations')}>Invitaciones</button>}{canManage && <button className={panel === 'pending' ? 'active' : ''} onClick={() => setPanel('pending')}>Por aprobar <span>{pendingMembers.length}</span></button>}</div>{props.onRoles && <Button variant="ghost" icon={<ShieldCheck size={16} />} onClick={props.onRoles}>Gestionar roles</Button>}</div>
+    {panel !== "invitations" && <><div className="product-filters"><label className="search-field"><Search size={17} /><input aria-label="Buscar personas" placeholder="Buscar por nombre, correo o área…" value={search} onChange={event => setSearch(event.target.value)} /></label><select aria-label="Filtrar por rol" value={roleFilter} onChange={event => { const next = new URLSearchParams(params); if (event.target.value) next.set('role', event.target.value); else next.delete('role'); setParams(next); }}><option value="">Todos los roles</option>{roles.map(role => <option key={role.id} value={role.id}>{roleLabel(role)}</option>)}</select></div>
+    {props.isLoading && !members.length ? <LoadingState label="Cargando personas…" rows={4} /> : <div className="day-people-grid">
+      {shown.map(item => <article className="day-person-card" key={item.id}>
+        <header><span className="person-avatar">{initials(item.user.name)}</span><span className={`day-member-badge ${item.userType === 'EXTERNAL' ? 'external' : ''}`}>{item.userType === 'EXTERNAL' ? 'Invitado' : 'Equipo interno'}</span></header>
+        <h2>{item.user.name}{item.userId === currentUserId && <small> Tú</small>}</h2><p>{item.user.email}</p>
+        <dl><div><dt><ShieldCheck size={14} />Rol</dt><dd>{roleLabel(item.role)}</dd></div><div><dt><UsersRound size={14} />Área</dt><dd>{item.area?.name ?? 'Por definir'}</dd></div><div><dt><MapPin size={14} />Localidad</dt><dd>{item.localityScopes?.map(scope => scope.locality.name).join(', ') || item.locality?.name || 'Toda el área'}</dd></div></dl>
+        <footer>{props.onAssign && panel === 'active' && <Button variant="ghost" size="sm" icon={<Plus size={15} />} onClick={() => props.onAssign?.(item.userId)}>Asignar tarea</Button>}{canManage && item.userId !== currentUserId && (has('workspace.manage') || !item.roleId || roles.some(role => role.id === item.roleId)) && <Button size="sm" onClick={() => open(panel === 'pending' ? 'approve' : 'edit', item)}>{panel === 'pending' ? 'Revisar acceso' : 'Editar acceso'}</Button>}</footer>
+      </article>)}
+      {!props.isLoading && !shown.length && <EmptyState icon={<UsersRound size={24} />} title={panel === 'pending' ? 'No hay accesos por aprobar' : 'No encontramos personas'} description={panel === 'pending' ? 'Las nuevas solicitudes aparecerán aquí para que revises su rol y área.' : 'Prueba otro nombre o quita el filtro de rol.'} />}
+    </div>}
+    </>}{panel === "invitations" && <InvitationsList token={props.token} workspaceId={props.workspaceId} />}
+    {modal && <Dialog title={inviteUrl ? 'Invitación lista' : modal === 'invite' ? 'Invitar a una persona' : modal === 'approve' ? 'Aprobar acceso' : 'Editar acceso'} description={inviteUrl ? 'Comparte el enlace directamente con la persona invitada.' : member ? `${member.user.name} · ${member.user.email}` : 'Un correo, un rol y un área. El acceso queda definido desde el inicio.'} onClose={() => setModal(undefined)} busy={busy}>
+      {inviteUrl ? <div className="product-form"><div className="success-note"><Check size={20} /><span>El enlace caduca en 7 días. La persona creará su contraseña al ingresar.</span></div><label>Enlace de invitación<input readOnly aria-label="Enlace de invitación" value={inviteUrl} onFocus={event => event.target.select()} /></label>{error && <p role="alert" className="form-error">{error}</p>}<footer className="product-form-actions"><Button onClick={() => setModal(undefined)}>Listo</Button><Button variant="primary" icon={<Copy size={16} />} onClick={async () => { try { await navigator.clipboard.writeText(inviteUrl); setCopied(true); } catch { setError('Selecciona y copia el enlace del campo.'); } }}>{copied ? 'Copiado' : 'Copiar enlace'}</Button></footer></div> : <form className="product-form" onSubmit={submit}>
+        <ol className="day-form-steps">{['Persona', 'Responsabilidad', 'Confirmar acceso'].map((label,index) => <li key={label} className={step===index?'current':step>index?'complete':''}><span>{index+1}</span>{label}</li>)}</ol>
+        {step === 0 && <><label>Correo de la persona<input data-autofocus type="email" required value={email} onChange={event => setEmail(event.target.value)} placeholder="nombre@empresa.com" /></label><fieldset className="day-access-choice"><legend>¿Cómo participará?</legend><label><input type="radio" name="userType" checked={type==='INTERNAL'} onChange={() => changeType('INTERNAL')} /><strong>Parte del equipo</strong><span>Trabaja en un área de la empresa.</span></label><label><input type="radio" name="userType" checked={type==='EXTERNAL'} onChange={() => changeType('EXTERNAL')} /><strong>Invitado externo</strong><span>Colabora únicamente en un proyecto compartido.</span></label></fieldset></>}
+        {step === 1 && <><label>¿Qué puede hacer?<select value={roleId} required onChange={event => setRoleId(event.target.value)}><option value="" disabled>Selecciona un rol</option>{choices.map(role => <option key={role.id} value={role.id}>{roleLabel(role)}</option>)}</select></label><div className="scope-note"><strong>{chosenRole && roleLabel(chosenRole)}</strong><p>{chosenRole && roleSummary(chosenRole)}</p></div>
+        <label>¿En qué área trabaja?<select value={areaId} required onChange={event => { setAreaId(event.target.value); setLocalityIds([]); setPositionId(''); }}><option value="" disabled>Selecciona un área</option>{areas.map(area => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label>
+        {modal === 'invite' && type === 'EXTERNAL' && <label>Proyecto que podrá consultar<select required value={inviteProject} onChange={event => setInviteProject(event.target.value)}><option value="" disabled>Selecciona un proyecto</option>{projects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>}
+        <details className="form-details" open={localityIds.length>0||undefined}><summary>Precisar localidades y puesto</summary><fieldset><legend>Localidades permitidas</legend><p className="muted-note">Sin selección: toda el área. El alcance debe estar dentro de las localidades que puedes administrar.</p><div className="checkbox-options">{localities.filter(locality => locality.areaId===areaId).map(locality => <label key={locality.id}><input type="checkbox" checked={localityIds.includes(locality.id)} onChange={event => setLocalityIds(current => event.target.checked ? [...current,locality.id] : current.filter(id => id!==locality.id))} />{locality.name}</label>)}</div></fieldset><label>Puesto<select value={positionId} onChange={event => setPositionId(event.target.value)}><option value="">Sin puesto</option>{positions.filter(position => position.areaId===areaId).map(position => <option key={position.id} value={position.id}>{position.name}</option>)}</select><small>El puesto describe su función. El rol define sus permisos.</small></label></details></>}
+        {step === 2 && <section className="day-access-review"><span className="person-avatar">{initials(member?.user.name ?? email)}</span><h3>{member?.user.name ?? email}</h3><p>{modal==='invite'?'Recibirá este acceso al aceptar la invitación.':'Su acceso quedará definido así.'}</p><dl><div><dt>Tipo</dt><dd>{type==='INTERNAL'?'Equipo interno':'Invitado externo'}</dd></div><div><dt>Rol</dt><dd>{chosenRole&&roleLabel(chosenRole)}</dd></div><div><dt>Área</dt><dd>{areas.find(area=>area.id===areaId)?.name}</dd></div><div><dt>Localidades</dt><dd>{localityIds.length?localities.filter(locality=>localityIds.includes(locality.id)).map(locality=>locality.name).join(', '):'Toda el área'}</dd></div>{inviteProject&&<div><dt>Proyecto</dt><dd>{projects.find(project=>project.id===inviteProject)?.name}</dd></div>}</dl><div className="scope-note"><p>{chosenRole&&roleSummary(chosenRole)}</p>{type==='EXTERNAL'&&<p>Sin acceso a la administración, el directorio de personas ni los comentarios internos.</p>}</div></section>}
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <footer className="product-form-actions"><Button disabled={busy} onClick={() => step > (modal==='invite'?0:1) ? setStep(step-1) : setModal(undefined)}>{step > (modal==='invite'?0:1)?'Atrás':'Cancelar'}</Button><Button type="submit" variant="primary" disabled={busy || (step>0&&!choices.length)}>{busy?'Guardando…':step<2?'Continuar':modal==='invite'?'Crear invitación':modal==='approve'?'Aprobar acceso':'Guardar acceso'}{step<2&&<ArrowRight size={16}/>}</Button></footer>
+      </form>}
+    </Dialog>}
+  </section>;
 }

@@ -80,13 +80,16 @@ export const approveMemberSchema = z.object({
     memberId: uuidParam
   }),
   body: z.object({
+    expectedUpdatedAt: z.string().datetime().optional(),
     roleId: uuidParam.optional(),
     areaId: uuidParam.optional(),
     localityId: uuidParam.optional(),
     localityIds: z.array(uuidParam).max(50).optional(),
-    positionId: uuidParam.optional(),
+    positionId: uuidParam.nullable().optional(),
     userType: z.enum(["INTERNAL", "EXTERNAL"]).optional()
   })
 });
 
 export const updateMemberSchema = approveMemberSchema;
+
+export const revokeInvitationSchema = z.object({ params: z.object({ workspaceId: uuidParam, invitationId: uuidParam }) });

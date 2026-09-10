@@ -5,10 +5,13 @@ type NotificationItem = {
   title: string;
   message: string;
   createdAt: string;
+  url?: string;
+  actionLabel?: string;
 };
 
 type RealtimeNotificationsProps = {
   notifications: NotificationItem[];
+  onOpen: (url: string) => void;
   onDismiss: (notificationId: string) => void;
 };
 
@@ -19,7 +22,7 @@ function formatNotificationTime(value: string) {
   }).format(new Date(value));
 }
 
-export function RealtimeNotifications({ notifications, onDismiss }: RealtimeNotificationsProps) {
+export function RealtimeNotifications({ notifications, onDismiss, onOpen }: RealtimeNotificationsProps) {
   if (notifications.length === 0) {
     return <></>;
   }
@@ -33,8 +36,9 @@ export function RealtimeNotifications({ notifications, onDismiss }: RealtimeNoti
             <strong>{notification.title}</strong>
             <p>{notification.message}</p>
             <small>{formatNotificationTime(notification.createdAt)}</small>
+            {notification.url ? <button type="button" className="toast-open" onClick={() => { onOpen(notification.url!); onDismiss(notification.id); }}>{notification.actionLabel ?? "Ver detalle"}</button> : undefined}
           </div>
-          <button type="button" onClick={() => onDismiss(notification.id)} aria-label="Cerrar notificacion">
+          <button type="button" onClick={() => onDismiss(notification.id)} aria-label="Cerrar notificación">
             <X size={15} />
           </button>
         </article>

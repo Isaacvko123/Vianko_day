@@ -1,4 +1,4 @@
-export type ViewKey = "projects" | "board" | "completed" | "management" | "members" | "reports";
+export type ViewKey = "work" | "roles" | "organization" | "notifications" | "projects" | "board" | "completed" | "management" | "members" | "reports";
 export type AuthMode = "login" | "request";
 export type BoardMode = "kanban" | "list";
 
@@ -28,6 +28,7 @@ export type PermissionKey =
   | "project.create"
   | "project.update"
   | "project.delete"
+  | "project.view_area"
   | "project.view_all"
   | "project.manage_members"
   | "project.request_staffing"
@@ -39,6 +40,8 @@ export type PermissionKey =
   | "task.update_progress"
   | "task.delete"
   | "task.assign"
+  | "task.complete"
+  | "task.reopen"
   | "task.change_status"
   | "task.comment"
   | "task.log_time"
@@ -66,6 +69,7 @@ export type AuthSession = {
 };
 
 export type Role = {
+  permissions?: PermissionKey[];
   id: string;
   workspaceId: string;
   name: string;
@@ -175,6 +179,7 @@ export type ProjectMember = {
 };
 
 export type Project = {
+  permissions?: PermissionKey[];
   id: string;
   workspaceId: string;
   areaId?: string;
@@ -245,7 +250,15 @@ export type TaskCounts = {
   subtasks: number;
 };
 
+export type TaskCapabilities = {
+  canView: boolean; canEdit: boolean; canUpdateProgress: boolean; canAssign: boolean;
+  canChangeStatus: boolean; canComplete: boolean; canReopen: boolean; canComment: boolean;
+  canLogTime: boolean; canCreateSubtasks: boolean; canSeeInternalComments: boolean;
+  allowedStatusIds: string[];
+};
+
 export type Task = {
+  capabilities?: TaskCapabilities;
   id: string;
   workspaceId: string;
   projectId: string;
@@ -358,6 +371,7 @@ export type StaffingAssignment = {
 };
 
 export type StaffingRequest = {
+  canRespond?: boolean;
   id: string;
   workspaceId: string;
   projectId: string;

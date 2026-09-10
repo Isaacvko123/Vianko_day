@@ -1,3 +1,4 @@
+import type { Prisma, PrismaClient } from "@prisma/client";
 import type { Request } from "express";
 import { prisma } from "../db/prisma.js";
 import { env } from "../config/env.js";
@@ -13,11 +14,11 @@ function getClientIp(req: Request) {
  * Crea un access token corto y un refresh token opaco de rotacion diaria.
  * El refresh token se muestra una sola vez al cliente; la DB guarda solo su hash HMAC.
  */
-export async function createSession(userId: string, req: Request) {
+export async function createSession(userId: string, req: Request, database: Prisma.TransactionClient | PrismaClient = prisma) {
   const refreshToken = generateOpaqueToken();
   const refreshTokenExpiresAt = new Date(Date.now() + env.REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
 
-  await prisma.session.create({
+  await database.session.create({
     data: {
       userId,
       refreshTokenHash: hashToken(refreshToken),
@@ -41,10 +42,10 @@ export async function createSession(userId: string, req: Request) {
 export async function rotateSession(refreshToken: string, req: Request) {
   const refreshTokenHash = hashToken(refreshToken);
   const currentSession = await prisma.session.findUnique({
-    where: { refreshTokenHash }
+    where: { refreshTokenHash }, include: { user: { select: { isActive: true } } }
   });
 
-  if (!currentSession || currentSession.expiresAt <= new Date()) {
+  if (!currentSession || !currentSession.user.isActive || currentSession.expiresAt <= new Date()) {
     throw new AppError(401, "REFRESH_INVALID", "Invalid refresh token.");
   }
 
@@ -61,15 +62,11 @@ export async function rotateSession(refreshToken: string, req: Request) {
     throw new AppError(401, "REFRESH_REUSED", "Refresh token reuse detected.");
   }
 
-  await prisma.session.update({
-    where: { id: currentSession.id },
-    data: {
-      revokedAt: new Date(),
-      rotatedAt: new Date()
-    }
+  return prisma.$transaction(async tx => {
+    const consumed = await tx.session.updateMany({ where: { id: currentSession.id, revokedAt: null }, data: { revokedAt: new Date(), rotatedAt: new Date() } });
+    if (consumed.count !== 1) throw new AppError(401, "REFRESH_REUSED", "Refresh token already consumed.");
+    return createSession(currentSession.userId, req, tx);
   });
-
-  return createSession(currentSession.userId, req);
 }
 
 export async function revokeSession(refreshToken: string) {

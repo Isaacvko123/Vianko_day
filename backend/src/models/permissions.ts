@@ -10,6 +10,7 @@ export const PERMISSIONS = [
   { key: "project.create", description: "Create projects." },
   { key: "project.update", description: "Update projects." },
   { key: "project.delete", description: "Archive or delete projects." },
+  { key: "project.view_area", description: "View workspace-visible projects in the member area and localities." },
   { key: "project.view_all", description: "View all workspace projects." },
   { key: "project.manage_members", description: "Add or remove project members." },
   { key: "project.request_staffing", description: "Request people from other areas for a project." },
@@ -21,6 +22,8 @@ export const PERMISSIONS = [
   { key: "task.update_progress", description: "Update task progress without editing core task fields." },
   { key: "task.delete", description: "Archive or delete tasks." },
   { key: "task.assign", description: "Assign and unassign users." },
+  { key: "task.complete", description: "Review and complete visible tasks." },
+  { key: "task.reopen", description: "Reopen completed tasks in accessible projects." },
   { key: "task.change_status", description: "Move tasks between statuses." },
   { key: "task.comment", description: "Comment on tasks." },
   { key: "task.log_time", description: "Register worked time." },
@@ -40,12 +43,12 @@ export const ROLE_DEFINITIONS: Array<{
 }> = [
   {
     name: "Admin",
-    description: "Administracion total del workspace. Uso reservado para Isaac/admin TI.",
+    description: "Administra la empresa, usuarios y permisos. Acceso a todos los proyectos.",
     permissions: allPermissions
   },
   {
     name: "Admin TI",
-    description: "Administracion tecnica con alcance amplio. No es para gerentes de area.",
+    description: "Perfil anterior de administración. Acceso completo a la empresa y sus proyectos.",
     permissions: allPermissions
   },
   {
@@ -63,6 +66,8 @@ export const ROLE_DEFINITIONS: Array<{
       "task.update_progress",
       "task.assign",
       "task.change_status",
+      "task.complete",
+      "task.reopen",
       "task.comment",
       "task.log_time",
       "task.view_all",
@@ -71,14 +76,14 @@ export const ROLE_DEFINITIONS: Array<{
   },
   {
     name: "Gerente",
-    description: "Gestiona proyectos, actividades y personal de su area.",
+    description: "Coordina los proyectos compartidos de su área, invita personas y responde solicitudes de apoyo.",
     permissions: [
       "workspace.invite_users",
       "area.approve_members",
       "position.manage",
       "project.create",
       "project.update",
-      "project.view_all",
+      "project.view_area",
       "project.manage_members",
       "project.request_staffing",
       "staffing.respond",
@@ -89,6 +94,8 @@ export const ROLE_DEFINITIONS: Array<{
       "task.update_progress",
       "task.assign",
       "task.change_status",
+      "task.complete",
+      "task.reopen",
       "task.comment",
       "task.log_time",
       "task.view_all",
@@ -98,7 +105,7 @@ export const ROLE_DEFINITIONS: Array<{
   },
   {
     name: "Coordinador",
-    description: "Coordina como lider tecnico: crea, edita y asigna solo en proyectos propios o donde participa.",
+    description: "Organiza proyectos, crea y asigna tareas, revisa resultados y coordina el apoyo de otras áreas.",
     permissions: [
       "project.create",
       "project.update",
@@ -111,6 +118,8 @@ export const ROLE_DEFINITIONS: Array<{
       "task.update_progress",
       "task.assign",
       "task.change_status",
+      "task.complete",
+      "task.reopen",
       "task.comment",
       "task.log_time",
       "task.view_all",
@@ -119,27 +128,27 @@ export const ROLE_DEFINITIONS: Array<{
   },
   {
     name: "Developer",
-    description: "Actualiza estados, avances, comentarios y tiempo. No crea tareas.",
-    permissions: ["task.update_progress", "task.change_status", "task.comment", "task.log_time", "task.view_all", "report.view_project"]
+    description: "Perfil anterior de colaborador: actualiza sus tareas, comenta y registra tiempo.",
+    permissions: ["task.update_progress", "task.change_status", "task.comment", "task.log_time", "task.view_all"]
   },
   {
     name: "Colaborador",
-    description: "Seguimiento operativo sin administracion.",
-    permissions: ["task.comment", "task.log_time", "task.view_all"]
+    description: "Realiza las tareas asignadas, actualiza su avance y comparte comentarios y tiempo.",
+    permissions: ["task.update_progress", "task.change_status", "task.comment", "task.log_time", "task.view_all"]
   },
   {
     name: "Invitado externo",
-    description: "Limited project collaborator.",
-    permissions: ["task.comment", "task.log_time", "task.view_all"]
+    description: "Trabaja en tareas asignadas de proyectos donde participa. Sin administración ni comentarios internos.",
+    permissions: ["task.update_progress", "task.change_status", "task.comment", "task.log_time", "task.view_all"]
   },
   {
     name: "Solo lectura",
-    description: "Read-only project access.",
-    permissions: ["task.view_all", "report.view_project"]
+    description: "Consulta tareas compartidas. No crea, modifica, comenta ni registra tiempo.",
+    permissions: ["task.view_all"]
   },
   {
     name: "Cliente",
-    description: "External client access to visible task activity.",
+    description: "Consulta y comenta tareas compartidas dentro de sus proyectos.",
     permissions: ["task.comment", "task.view_all"]
   }
 ];

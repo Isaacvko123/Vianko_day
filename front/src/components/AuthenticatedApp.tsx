@@ -1,5 +1,11 @@
+import { ProjectChat } from './ProjectChat';
+import { useState } from 'react';
+import { TaskComposer, type ComposeOptions } from './TaskComposer';
+import { NotificationInbox } from "./NotificationInbox";
 import { BoardView } from "./BoardView";
-import { CompletedTasksView } from "./CompletedTasksView";
+import { WorkItemsView } from './WorkItemsView';
+import { RolesView } from './RolesView';
+import { OrganizationView } from './OrganizationView';
 import { MainLayout } from "./MainLayout";
 import { ManagementView } from "./ManagementView";
 import { MembersView } from "./MembersView";
@@ -14,6 +20,7 @@ type AuthenticatedAppProps = {
 };
 
 export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
+  const [composer, setComposer] = useState<ComposeOptions>();
   const {
     session,
     selectedWorkspace,
@@ -21,7 +28,6 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     activeProjectId,
     activeProject,
     activeBoard,
-    completedArchive,
     boardStatuses,
     tasks,
     selectedTaskId,
@@ -46,7 +52,6 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     boardMode,
     isLoadingProjects,
     isLoadingBoard,
-    isLoadingCompletedArchive,
     isLoadingDetail,
     isLoadingMembers,
     isLoadingManagement,
@@ -62,12 +67,14 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     return undefined;
   }
 
-  const visibleGlobalError = globalError.startsWith("Missing permission:")
-    ? ""
-    : globalError;
+  const visibleGlobalError = globalError;
+  const projectPermissions = new Set(activeProject?.permissions ?? []);
 
   return (
     <MainLayout
+      onCreateTask={permissions.canCreateTasks && currentView !== 'board' ? () => setComposer({ projectId: activeProjectId }) : undefined}
+      unreadCount={controller.inbox.unreadCount}
+      connectionState={controller.connectionState}
       session={session}
       workspace={selectedWorkspace}
       currentView={currentView}
@@ -79,8 +86,13 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
     >
       {visibleGlobalError ? <div className="global-error">{visibleGlobalError}</div> : undefined}
 
+      {currentView === "notifications" ? <NotificationInbox inbox={controller.inbox} onOpen={actions.openNotification} onEnable={actions.handleEnableBrowserNotifications} /> : undefined}
+
       {currentView === "projects" ? (
         <ProjectsView
+          onCompose={projectId => setComposer({projectId})}
+          currentAreaId={selectedWorkspace.member.area?.id}
+          currentLocalityId={selectedWorkspace.member.locality?.id}
           projects={visibleProjects}
           areas={areas}
           localities={localities}
@@ -103,19 +115,28 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
         <>
           <div className="board-layout">
             <BoardView
+              onProjects={() => actions.setCurrentView('projects')}
+              canUseChat={selectedWorkspace.member.userType === 'INTERNAL' && projectPermissions.has('task.view_all')}
+              chatPanel={activeProject && <ProjectChat key={activeProject.id} token={session.tokens.accessToken} project={activeProject} currentUserId={session.user.id} connectionState={controller.connectionState} />}
+              onCompose={options => setComposer({ projectId: activeProjectId, ...options })}
+              key={activeBoard?.id ?? activeProjectId ?? "board"}
+              boards={controller.boards}
+              onBoardChange={actions.setActiveBoardId}
+              canChangeTaskStatus={permissions.canChangeTaskStatus}
+              onRequestStaffing={projectPermissions.has("project.request_staffing") ? () => actions.openNotificationUrl(`/management?create=1&project=${activeProjectId ?? ""}`) : undefined}
               projects={visibleProjects}
               activeProject={activeProject}
               activeBoard={activeBoard}
-              tasks={tasks}
+              tasks={tasks.filter((task) => task.boardId === activeBoard?.id)}
               boardMode={boardMode}
               isLoading={isLoadingBoard}
               selectedTaskId={selectedTaskId}
               currentUserId={session.user.id}
               workspaceMembers={members}
               roles={roles}
-              canCreateTasks={permissions.canCreateTasks}
-              canManageProjectMembers={permissions.canManageProjectMembers}
-              canEditCompletedTasks={permissions.canUseManagerPlanning}
+              canCreateTasks={projectPermissions.has("task.create")}
+              canManageProjectMembers={projectPermissions.has("project.manage_members")}
+              canEditCompletedTasks={permissions.canReopenTasks}
               onRefresh={() => activeProjectId ? void actions.loadProjectContext(activeProjectId) : undefined}
               onProjectChange={actions.setActiveProjectId}
               onBoardModeChange={actions.setBoardMode}
@@ -126,6 +147,16 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
             />
           </div>
           <TaskDetailPanel
+            canDeleteTask={projectPermissions.has('task.delete')}
+            onOpenChat={selectedWorkspace.member.userType === 'INTERNAL' ? () => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${activeProjectId}&chat=1`) : undefined}
+            connectionState={controller.connectionState}
+            token={session.tokens.accessToken}
+            onReload={async () => { if (selectedTaskId) await actions.loadSelectedTaskDetail(selectedTaskId, {silent:true}); if (activeProjectId) await actions.loadProjectContext(activeProjectId, {silent:true}); }}
+            key={selectedTask?.id ?? "no-task"}
+            canUseInternalComments={selectedWorkspace.member.userType === "INTERNAL"}
+            canUpdateTasks={permissions.canUpdateTasks}
+            canUpdateProgress={permissions.canUpdateProgress}
+            canChangeTaskStatus={permissions.canChangeTaskStatus}
             task={selectedTask}
             subtasks={subtasks}
             statuses={boardStatuses}
@@ -137,9 +168,9 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
             isLoading={isLoadingDetail}
             currentUserId={session.user.id}
             canCreateSubtasks={permissions.canCreateTasks}
-            canMoveClosedTasks={permissions.canUseManagerPlanning}
+            canMoveClosedTasks={permissions.canReopenTasks}
             canViewPlanning={permissions.canUseManagerPlanning}
-            canEditPlanning={permissions.canUseManagerPlanning}
+            canEditPlanning={permissions.canUpdateTasks}
             canModifyCompletedTask={permissions.canModifyCompletedTask}
             onClose={() => actions.setSelectedTaskId(undefined)}
             onUpdateTaskPlan={actions.handleUpdateTaskPlan}
@@ -154,43 +185,9 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
         </>
       ) : undefined}
 
-      {currentView === "completed" ? (
-        <>
-          <CompletedTasksView
-            archive={completedArchive}
-            isLoading={isLoadingCompletedArchive}
-            selectedTaskId={selectedTaskId}
-            onRefresh={() => void actions.loadCompletedArchive()}
-            onOpenTask={actions.handleOpenArchivedTask}
-          />
-          <TaskDetailPanel
-            task={selectedTask}
-            subtasks={subtasks}
-            statuses={boardStatuses}
-            projectMembers={activeProject?.members ?? []}
-            workspaceMembers={members}
-            comments={comments}
-            timeLogs={timeLogs}
-            events={taskEvents}
-            isLoading={isLoadingDetail}
-            currentUserId={session.user.id}
-            canCreateSubtasks={false}
-            canMoveClosedTasks={permissions.canUseManagerPlanning}
-            canViewPlanning={permissions.canUseManagerPlanning}
-            canEditPlanning={false}
-            canModifyCompletedTask={permissions.canModifyCompletedTask}
-            onClose={() => actions.setSelectedTaskId(undefined)}
-            onUpdateTaskPlan={actions.handleUpdateTaskPlan}
-            onCreateSubtask={actions.handleCreateSubtask}
-            onSubtaskStatusChange={actions.handleTaskStatusChange}
-            onCreateSubtaskTimeLog={actions.handleCreateSubtaskTimeLog}
-            onAddTaskAssignee={actions.handleAddTaskAssignee}
-            onMentionTaskUser={actions.handleMentionTaskUser}
-            onCreateComment={actions.handleCreateComment}
-            onCreateTimeLog={actions.handleCreateTimeLog}
-          />
-        </>
-      ) : undefined}
+      {(currentView === 'work' || currentView === 'completed') && <WorkItemsView key={`${selectedWorkspace.id}-${currentView}`} token={session.tokens.accessToken} workspaceId={selectedWorkspace.id} completed={currentView === 'completed'} onCreate={permissions.canCreateTasks ? () => setComposer({}) : undefined} userName={session.user.name} unreadCount={controller.inbox.unreadCount} onInbox={() => actions.setCurrentView('notifications')} onProjects={() => actions.setCurrentView('projects')} onOpen={(projectId, taskId) => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}&task=${taskId}`)} />}
+      {currentView === 'roles' && <RolesView key={selectedWorkspace.id} token={session.tokens.accessToken} workspaceId={selectedWorkspace.id} onSaved={() => { void actions.loadMembers(); void actions.loadWorkspaces(); }} onPeople={roleId => actions.openNotificationUrl(`/members?role=${roleId}`)} />}
+      {currentView === 'organization' && <OrganizationView token={session.tokens.accessToken} workspaceId={selectedWorkspace.id} onSaved={() => actions.loadWorkspaceCatalog()} key={selectedWorkspace.id} areas={areas} localities={localities} positions={positions} members={members} workspacePermissions={selectedWorkspace.member.permissions ?? []} onCreateArea={actions.handleCreateArea} onCreateLocality={actions.handleCreateLocality} onCreatePosition={actions.handleCreatePosition} />}
 
       {currentView === "management" ? (
         <ManagementView
@@ -200,9 +197,9 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
           staffingPageSize={staffingPageSize}
           projects={visibleProjects}
           members={members}
-          areas={areas}
-          localities={localities}
-          positions={positions}
+          areas={controller.staffingCatalog?.areas ?? areas}
+          localities={controller.staffingCatalog?.localities ?? localities}
+          positions={controller.staffingCatalog?.positions ?? positions}
           roles={roles}
           currentAreaId={selectedWorkspace.member.area?.id}
           canAnswerAllRequests={permissions.canAnswerAllStaffingRequests}
@@ -217,6 +214,15 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
 
       {currentView === "members" ? (
         <MembersView
+          onAssign={permissions.canCreateTasks ? userId => setComposer({assigneeId:userId, projectId:visibleProjects.find(project => project.areaId === members.find(member => member.userId===userId)?.areaId && project.permissions?.includes('task.create'))?.id}) : undefined}
+          token={session.tokens.accessToken}
+          workspaceId={selectedWorkspace.id}
+          key={selectedWorkspace.id}
+          currentAreaId={selectedWorkspace.member.area?.id}
+          currentLocalityIds={selectedWorkspace.member.localityScopes?.map(scope => scope.localityId) ?? (selectedWorkspace.member.locality ? [selectedWorkspace.member.locality.id] : [])}
+          onRoles={permissions.canManageRoles ? () => actions.setCurrentView('roles') : undefined}
+          workspacePermissions={selectedWorkspace.member.permissions ?? []}
+          currentUserId={session.user.id}
           members={members}
           pendingMembers={pendingMembers}
           roles={roles}
@@ -237,6 +243,8 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
 
       {currentView === "reports" ? (
         <ReportsView
+          onOpenProject={projectId => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}`)}
+          onOpenTask={(projectId, taskId) => actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}&task=${taskId}`)}
           summary={summary}
           period={reportPeriod}
           isLoading={isLoadingReports}
@@ -245,7 +253,8 @@ export function AuthenticatedApp({ controller }: AuthenticatedAppProps) {
         />
       ) : undefined}
 
-      <RealtimeNotifications notifications={notifications} onDismiss={actions.dismissNotification} />
+      {composer && <TaskComposer token={session.tokens.accessToken} projects={visibleProjects} initial={composer} currentUserId={session.user.id} onClose={() => setComposer(undefined)} onCreated={(projectId, taskId) => { setComposer(undefined); actions.openNotificationUrl(`/board?workspace=${selectedWorkspace.id}&project=${projectId}&task=${taskId}`); }} />}
+      <RealtimeNotifications onOpen={actions.openNotificationUrl} notifications={notifications} onDismiss={actions.dismissNotification} />
     </MainLayout>
   );
 }

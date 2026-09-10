@@ -54,7 +54,7 @@ export type CreateWorkspaceInput = {
   defaultLocalityCode?: string;
 };
 
-export type UpdateProjectInput = Partial<Omit<CreateProjectInput, "workspaceId">>;
+export type UpdateProjectInput = Partial<Omit<CreateProjectInput, "workspaceId" | "localityId" | "startDate" | "endDate">> & { localityId?: string | null; startDate?: string | null; endDate?: string | null; expectedUpdatedAt?: string };
 
 export type CreateTaskInput = {
   boardId: string;
@@ -70,9 +70,15 @@ export type CreateTaskInput = {
 };
 
 export type UpdateTaskInput = {
+  title?: string;
+  description?: string;
+  priority?: Task["priority"];
+  progress?: number;
   startAt?: string;
   dueAt?: string;
   estimateMinutes?: number;
+  clearFields?: Array<"startAt" | "dueAt" | "estimateMinutes">;
+  expectedUpdatedAt?: string;
 };
 
 export type InviteUserInput = {
@@ -124,11 +130,12 @@ export type CreatePositionInput = {
 export type ApproveMemberInput = {
   workspaceId: string;
   memberId: string;
+  expectedUpdatedAt?: string;
   roleId?: string;
   areaId?: string;
   localityId?: string;
   localityIds?: string[];
-  positionId?: string;
+  positionId?: string | null;
   userType?: UserType;
 };
 
@@ -349,8 +356,16 @@ export function createBoardStatus(token: string, boardId: string, body: Omit<Boa
   });
 }
 
-export function listTasks(token: string, boardId: string, view: TaskListView = "active") {
-  return apiRequest<{ tasks: Task[] }>(`/boards/${boardId}/tasks?view=${encodeURIComponent(view)}`, { token });
+export async function listTasks(token: string, boardId: string, view: TaskListView = "active") {
+  const tasks = new Map<string, Task>();
+  const limit = 100;
+  for (let offset = 0; ; offset += limit) {
+    const page = await apiRequest<{ tasks: Task[] }>(
+      `/boards/${boardId}/tasks?view=${encodeURIComponent(view)}&limit=${limit}&offset=${offset}`, { token }
+    );
+    page.tasks.forEach((task) => tasks.set(task.id, task));
+    if (page.tasks.length < limit) return { tasks: [...tasks.values()] };
+  }
 }
 
 export function listSubtasks(token: string, taskId: string) {

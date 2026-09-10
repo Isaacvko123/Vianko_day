@@ -25,6 +25,8 @@ type UseWorkspacePeopleControllerOptions = {
   token?: string;
   workspaceId?: string;
   canLoadMemberDirectory: boolean;
+  canApproveMembers: boolean;
+  canLoadCatalog: boolean;
   onError: (message: string) => void;
 };
 
@@ -44,6 +46,8 @@ export function useWorkspacePeopleController({
   token,
   workspaceId,
   canLoadMemberDirectory,
+  canApproveMembers,
+  canLoadCatalog,
   onError
 }: UseWorkspacePeopleControllerOptions) {
   const queryClient = useQueryClient();
@@ -68,6 +72,7 @@ export function useWorkspacePeopleController({
   }
 
   async function fetchCatalog(): Promise<WorkspaceCatalogData> {
+    if (!canLoadCatalog) return { areas: [], localities: [], positions: [] };
     if (!token || !workspaceId) {
       throw new Error("Workspace no disponible.");
     }
@@ -92,7 +97,7 @@ export function useWorkspacePeopleController({
 
     const [memberResponse, pendingResponse, roleResponse, catalog] = await Promise.all([
       listWorkspaceMembers(token, workspaceId),
-      listPendingWorkspaceMembers(token, workspaceId),
+      canApproveMembers ? listPendingWorkspaceMembers(token, workspaceId) : Promise.resolve({ members: [] }),
       listWorkspaceRoles(token, workspaceId),
       fetchCatalog()
     ]);
@@ -248,7 +253,7 @@ export function useWorkspacePeopleController({
     areaId?: string;
     localityId?: string;
     localityIds?: string[];
-    positionId?: string;
+    positionId?: string | null;
     userType?: UserType;
   }) {
     if (!token || !workspaceId) {
@@ -266,11 +271,12 @@ export function useWorkspacePeopleController({
 
   async function handleUpdateMember(input: {
     memberId: string;
+    expectedUpdatedAt?: string;
     roleId?: string;
     areaId?: string;
     localityId?: string;
     localityIds?: string[];
-    positionId?: string;
+    positionId?: string | null;
     userType?: UserType;
   }) {
     if (!token || !workspaceId) {

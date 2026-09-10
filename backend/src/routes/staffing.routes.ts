@@ -1,5 +1,6 @@
 import { Router } from "express";
 import {
+  staffingCatalog,
   approveStaffingRequest,
   createStaffingRequest,
   listStaffingRequests,
@@ -18,6 +19,7 @@ import {
 export const staffingRouter = Router();
 
 staffingRouter.use(authenticate);
+staffingRouter.get("/catalog", validate(listStaffingRequestsSchema), asyncHandler(staffingCatalog));
 staffingRouter.get("/", validate(listStaffingRequestsSchema), asyncHandler(listStaffingRequests));
 staffingRouter.post("/", validate(createStaffingRequestSchema), asyncHandler(createStaffingRequest));
 staffingRouter.patch("/:requestId/approve", validate(approveStaffingRequestSchema), asyncHandler(approveStaffingRequest));

@@ -20,6 +20,8 @@ import {
   updateProject,
   updateTask
 } from "../api/endpoints";
+import type { UpdateTaskInput } from "../api/endpoints";
+import { isTaskDone, mergeTaskUpdate } from "../lib/tasks";
 import { queryKeys } from "../lib/queryKeys";
 import type { ActivityEvent, Board, BoardMode, Project, Task, TaskComment, TaskPriority, TimeLog } from "../types";
 
@@ -42,6 +44,7 @@ type ProjectContextData = {
 };
 
 type TaskDetailData = {
+  taskId: string;
   comments: TaskComment[];
   timeLogs: TimeLog[];
   subtasks: Task[];
@@ -55,6 +58,8 @@ export type CompletedProjectArchive = {
 
 export function useProjectBoardController({ token, workspaceId, onError, clearError }: UseProjectBoardControllerOptions) {
   const queryClient = useQueryClient();
+  const workspaceRef = useRef(workspaceId);
+  workspaceRef.current = workspaceId;
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>();
   const [activeProject, setActiveProject] = useState<Project>();
@@ -64,6 +69,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   const [completedTasks, setCompletedTasks] = useState<Task[]>([]);
   const [completedArchive, setCompletedArchive] = useState<CompletedProjectArchive[]>([]);
   const [selectedTaskId, setSelectedTaskId] = useState<string>();
+  const [detailTaskId, setDetailTaskId] = useState<string>();
   const [subtasks, setSubtasks] = useState<Task[]>([]);
   const [comments, setComments] = useState<TaskComment[]>([]);
   const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
@@ -72,12 +78,13 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   const activeProjectIdRef = useRef<string>();
   const selectedTaskIdRef = useRef<string>();
 
-  const activeBoard = boards.find((board) => board.id === activeBoardId) ?? boards[0];
+  const projectBoards = boards.filter((board) => board.projectId === activeProjectId);
+  const activeBoard = projectBoards.find((board) => board.id === activeBoardId) ?? projectBoards[0];
   const archivedCompletedTasks = completedArchive.flatMap((projectArchive) => projectArchive.tasks);
   const selectedTask = tasks.find((task) => task.id === selectedTaskId)
     ?? completedTasks.find((task) => task.id === selectedTaskId)
     ?? archivedCompletedTasks.find((task) => task.id === selectedTaskId);
-  const boardStatuses = activeBoard?.statuses ?? [];
+  const boardStatuses = boards.find((board) => board.id === selectedTask?.boardId)?.statuses ?? activeBoard?.statuses ?? [];
   const visibleProjects = useMemo(() => projects, [projects]);
 
   function applyProjects(nextProjects: Project[]) {
@@ -99,11 +106,11 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     const preferredTaskId = selectedTaskIdRef.current;
     const nextSelectedTaskId = preferredTaskId && allLoadedTasks.some((task) => task.id === preferredTaskId)
       ? preferredTaskId
-      : context.activeTasks[0]?.id ?? context.completedTasks[0]?.id;
+      : undefined;
 
     setActiveProject(context.project);
     setBoards(context.boards);
-    setActiveBoardId(firstBoard?.id);
+    setActiveBoardId((currentId) => context.boards.some((board) => board.id === currentId) ? currentId : firstBoard?.id);
     setTasks(context.activeTasks);
     setCompletedTasks(context.completedTasks);
     setSelectedTaskId(firstBoard ? nextSelectedTaskId : undefined);
@@ -114,6 +121,8 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   }
 
   function applyTaskDetail(detail: TaskDetailData) {
+    if (detail.taskId !== selectedTaskIdRef.current) return;
+    setDetailTaskId(detail.taskId);
     setComments(detail.comments);
     setTimeLogs(detail.timeLogs);
     setSubtasks(detail.subtasks);
@@ -138,16 +147,17 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       };
     }
 
-    const [taskResponse, completedTaskResponse] = await Promise.all([
-      listTasks(token, firstBoard.id, "active"),
-      listTasks(token, firstBoard.id, "completed")
-    ]);
-
+    const boardTasks = await Promise.all(projectBoards.map(async (board) => {
+      const [active, completed] = await Promise.all([
+        listTasks(token, board.id, "active"), listTasks(token, board.id, "completed")
+      ]);
+      return { active: active.tasks, completed: completed.tasks };
+    }));
     return {
       project: projectResponse.project,
       boards: projectBoards,
-      activeTasks: taskResponse.tasks,
-      completedTasks: completedTaskResponse.tasks
+      activeTasks: boardTasks.flatMap((board) => board.active),
+      completedTasks: boardTasks.flatMap((board) => board.completed)
     };
   }
 
@@ -166,6 +176,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       const eventResponse = await listTaskEvents(token, taskId);
 
       return {
+        taskId,
         comments: commentResponse.comments,
         timeLogs: timeResponse.timeLogs,
         subtasks: subtaskResponse.subtasks,
@@ -173,6 +184,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       };
     } catch {
       return {
+        taskId,
         comments: commentResponse.comments,
         timeLogs: timeResponse.timeLogs,
         subtasks: subtaskResponse.subtasks,
@@ -260,7 +272,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
         queryFn: () => listProjects(token, workspaceId),
         staleTime: 0
       });
-      applyProjects(response.projects);
+      if (workspaceRef.current === workspaceId) applyProjects(response.projects);
     } catch (error) {
       if (!options.silent) {
         onError(error instanceof Error ? error.message : "No se pudieron cargar proyectos.");
@@ -283,7 +295,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
         queryFn: () => fetchProjectContext(projectId),
         staleTime: 0
       });
-      applyProjectContext(context);
+      if (activeProjectIdRef.current === projectId) applyProjectContext(context);
     } catch (error) {
       if (!options.silent) {
         onError(error instanceof Error ? error.message : "No se pudo cargar el tablero.");
@@ -306,7 +318,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
         queryFn: () => fetchTaskDetail(taskId),
         staleTime: 0
       });
-      applyTaskDetail(detail);
+      if (selectedTaskIdRef.current === taskId) applyTaskDetail(detail);
     } catch (error) {
       if (!options.silent) {
         onError(error instanceof Error ? error.message : "No se pudo cargar el detalle de actividad.");
@@ -365,13 +377,14 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
 
   async function handleUpdateProject(projectId: string, input: {
     areaId?: string;
-    localityId?: string;
+    localityId?: string | null;
+    expectedUpdatedAt?: string;
     name?: string;
     description?: string;
     visibility?: "WORKSPACE" | "PRIVATE";
     color?: string;
-    startDate?: string;
-    endDate?: string;
+    startDate?: string | null;
+    endDate?: string | null;
   }) {
     if (!token) {
       throw new Error("Sesion no disponible.");
@@ -431,7 +444,8 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
 
     void queryClient.invalidateQueries({ queryKey: queryKeys.projectContext(activeProjectId) });
     setTasks((currentTasks) => [response.task, ...currentTasks]);
-    setCompletedTasks((currentTasks) => currentTasks.filter((task) => task.id !== response.task.id));
+    if (isTaskDone(response.task)) setCompletedTasks((currentTasks) => [response.task, ...currentTasks.filter((task) => task.id !== response.task.id)]);
+    selectedTaskIdRef.current = response.task.id;
     setSelectedTaskId(response.task.id);
   }
 
@@ -538,19 +552,21 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
 
   async function handleTaskStatusChange(taskId: string, statusId: string) {
     if (!token) {
-      return;
+      throw new Error("Sesión no disponible.");
     }
 
     const response = await changeTaskStatus(token, taskId, statusId);
     void queryClient.invalidateQueries({ queryKey: queryKeys.projectContext(activeProjectIdRef.current) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.taskDetail(taskId) });
     const updatedTask = response.task;
-    const knownTask = tasks.find((task) => task.id === taskId) ?? completedTasks.find((task) => task.id === taskId) ?? updatedTask;
-    const mergedTask = { ...knownTask, ...updatedTask };
+    const knownTask = tasks.find((task) => task.id === taskId) ?? completedTasks.find((task) => task.id === taskId) ?? subtasks.find((task) => task.id === taskId) ?? updatedTask;
+    const mergedTask = mergeTaskUpdate(knownTask, updatedTask);
     const isSelectedSubtask = mergedTask.parentTaskId === selectedTaskIdRef.current;
 
-    if (updatedTask.completedAt) {
-      setTasks((currentTasks) => currentTasks.filter((task) => task.id !== taskId));
+    if (isTaskDone(updatedTask)) {
+      setTasks((currentTasks) => currentTasks.some((task) => task.id === taskId)
+        ? currentTasks.map((task) => task.id === taskId ? mergedTask : task)
+        : [mergedTask, ...currentTasks]);
       setCompletedTasks((currentTasks) => [
         mergedTask,
         ...currentTasks.filter((task) => task.id !== taskId)
@@ -574,9 +590,12 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       });
     }
 
-    if (selectedTaskId === taskId) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reports(workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.completedArchive(workspaceId) });
+    if (selectedTaskIdRef.current === taskId) {
       void loadSelectedTaskDetail(taskId);
     } else if (isSelectedSubtask) {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.taskDetail(selectedTaskIdRef.current) });
       setSubtasks((currentSubtasks) => {
         const subtaskExists = currentSubtasks.some((subtask) => subtask.id === taskId);
         return subtaskExists
@@ -616,7 +635,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     }
   }
 
-  async function handleUpdateTaskPlan(input: { startAt?: string; dueAt?: string; estimateMinutes?: number }) {
+  async function handleUpdateTaskPlan(input: UpdateTaskInput) {
     if (!token || !selectedTaskId) {
       throw new Error("Selecciona una actividad.");
     }
@@ -624,8 +643,13 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     const response = await updateTask(token, selectedTaskId, input);
     void queryClient.invalidateQueries({ queryKey: queryKeys.projectContext(activeProjectIdRef.current) });
     void queryClient.invalidateQueries({ queryKey: queryKeys.taskDetail(selectedTaskId) });
-    setTasks((currentTasks) => currentTasks.map((task) => (task.id === selectedTaskId ? { ...task, ...response.task } : task)));
-    setCompletedTasks((currentTasks) => currentTasks.map((task) => (task.id === selectedTaskId ? { ...task, ...response.task } : task)));
+    setTasks((currentTasks) => currentTasks.map((task) => (task.id === selectedTaskId ? mergeTaskUpdate(task, response.task) : task)));
+    setCompletedTasks((currentTasks) => currentTasks.map((task) => (task.id === selectedTaskId ? mergeTaskUpdate(task, response.task) : task)));
+    setCompletedArchive((archive) => archive.map((group) => ({ ...group,
+      tasks: group.tasks.map((task) => task.id === selectedTaskId ? mergeTaskUpdate(task, response.task) : task)
+    })));
+    void queryClient.invalidateQueries({ queryKey: queryKeys.reports(workspaceId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.completedArchive(workspaceId) });
     void loadSelectedTaskDetail(selectedTaskId);
   }
 
@@ -636,7 +660,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
 
     const response = await createComment(token, selectedTaskId, body, isInternal);
     void queryClient.invalidateQueries({ queryKey: queryKeys.taskDetail(selectedTaskId) });
-    setComments((currentComments) => [...currentComments, response.comment]);
+    setComments((currentComments) => currentComments.some(comment => comment.id === response.comment.id) ? currentComments : [...currentComments, response.comment]);
     void loadSelectedTaskDetail(selectedTaskId);
   }
 
@@ -662,6 +686,8 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   }
 
   function handleOpenArchivedTask(projectId: string, taskId: string) {
+    activeProjectIdRef.current = projectId;
+    selectedTaskIdRef.current = taskId;
     setActiveProjectId(projectId);
     setSelectedTaskId(taskId);
     void loadProjectContext(projectId, { silent: true });
@@ -681,6 +707,10 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   }
 
   function resetProjectBoardState() {
+    activeProjectIdRef.current = undefined;
+    selectedTaskIdRef.current = undefined;
+    setCompletedArchive([]);
+    setDetailTaskId(undefined);
     setProjects([]);
     setActiveProject(undefined);
     setActiveProjectId(undefined);
@@ -714,7 +744,7 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
 
   useEffect(() => {
     if (projectContextQuery.data) {
-      applyProjectContext(projectContextQuery.data);
+      if (projectContextQuery.data.project.id === activeProjectIdRef.current) applyProjectContext(projectContextQuery.data);
     }
   }, [projectContextQuery.data, projectContextQuery.dataUpdatedAt]);
 
@@ -743,16 +773,6 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
   }, [completedArchiveQuery.data, completedArchiveQuery.dataUpdatedAt]);
 
   useEffect(() => {
-    if (!selectedTaskId) {
-      queryClient.removeQueries({ queryKey: queryKeys.taskDetail() });
-      setSubtasks([]);
-      setComments([]);
-      setTimeLogs([]);
-      setTaskEvents([]);
-    }
-  }, [selectedTaskId, queryClient]);
-
-  useEffect(() => {
     if (!activeProjectId) {
       setActiveProject(undefined);
       setBoards([]);
@@ -761,7 +781,9 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
       setCompletedTasks([]);
       setSelectedTaskId(undefined);
     } else {
-      void loadProjectContext(activeProjectId, { silent: true });
+      setActiveProject((current) => current?.id === activeProjectId ? current : undefined);
+      setTasks((current) => current.filter((task) => task.projectId === activeProjectId));
+      setCompletedTasks((current) => current.filter((task) => task.projectId === activeProjectId));
     }
   }, [activeProjectId, token, queryClient]);
 
@@ -771,25 +793,35 @@ export function useProjectBoardController({ token, workspaceId, onError, clearEr
     activeProjectId,
     activeProject,
     activeBoard,
+    boards: projectBoards,
     boardStatuses,
     tasks,
     completedTasks,
     completedArchive,
     selectedTaskId,
     selectedTask,
-    subtasks,
-    comments,
-    timeLogs,
-    taskEvents,
+    subtasks: detailTaskId === selectedTaskId ? subtasks : [],
+    comments: detailTaskId === selectedTaskId ? comments : [],
+    timeLogs: detailTaskId === selectedTaskId ? timeLogs : [],
+    taskEvents: detailTaskId === selectedTaskId ? taskEvents : [],
     boardMode,
     isLoadingProjects: projectsQuery.isFetching,
     isLoadingBoard: projectContextQuery.isFetching,
     isLoadingCompletedArchive: completedArchiveQuery.isFetching,
     isLoadingDetail: taskDetailQuery.isFetching,
     actions: {
-      setActiveProjectId,
+      setActiveProjectId: (projectId: string | undefined) => {
+        activeProjectIdRef.current = projectId;
+        selectedTaskIdRef.current = undefined;
+        setSelectedTaskId(undefined);
+        setActiveProjectId(projectId);
+      },
+      setActiveBoardId: (boardId: string) => { selectedTaskIdRef.current = undefined; setActiveBoardId(boardId); setSelectedTaskId(undefined); },
       setBoardMode,
-      setSelectedTaskId,
+      setSelectedTaskId: (taskId: string | undefined) => {
+        selectedTaskIdRef.current = taskId;
+        setSelectedTaskId(taskId);
+      },
       loadProjects,
       loadProjectContext,
       loadSelectedTaskDetail,

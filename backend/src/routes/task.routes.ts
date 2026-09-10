@@ -1,5 +1,7 @@
+import { z } from 'zod';
 import { Router } from "express";
 import {
+  deleteTask,
   addTaskAssignee,
   changeTaskStatus,
   createComment,
@@ -44,3 +46,5 @@ taskRouter.post("/tasks/:taskId/comments", validate(createCommentSchema), asyncH
 taskRouter.get("/tasks/:taskId/time-logs", validate(createTimeLogSchema.pick({ params: true })), asyncHandler(listTimeLogs));
 taskRouter.post("/tasks/:taskId/time-logs", validate(createTimeLogSchema), asyncHandler(createTimeLog));
 taskRouter.get("/tasks/:taskId/events", validate(createCommentSchema.pick({ params: true })), asyncHandler(listTaskEvents));
+
+taskRouter.delete("/tasks/:taskId", validate(z.object({params:z.object({taskId:z.string().uuid()}),body:z.object({expectedUpdatedAt:z.string().datetime()}).strict()})), asyncHandler(deleteTask));

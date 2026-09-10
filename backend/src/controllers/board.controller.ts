@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { DEFAULT_BOARD_STATUSES } from "../models/permissions.js";
 import { prisma } from "../db/prisma.js";
 import { activeRecordFilter } from "../db/filters.js";
 import { assertProjectPermission } from "../services/access-control.service.js";
@@ -39,8 +40,10 @@ export async function createBoard(req: Request, res: Response) {
       workspaceId: project.workspaceId,
       projectId,
       name,
-      description
-    }
+      description,
+      statuses: { create: DEFAULT_BOARD_STATUSES.map((status) => ({ ...status })) }
+    },
+    include: { statuses: true }
   });
 
   await prisma.activityLog.create({
@@ -86,7 +89,9 @@ export async function createBoardStatus(req: Request, res: Response) {
 
   await assertProjectPermission(userId, board.projectId, "board.update");
 
-  const status = await prisma.boardStatus.create({
+  const status = await prisma.$transaction(async (tx) => {
+    if (req.body.isDefault) await tx.boardStatus.updateMany({ where: { boardId, isDefault: true }, data: { isDefault: false } });
+    return tx.boardStatus.create({
     data: {
       boardId,
       name: req.body.name,
@@ -96,6 +101,7 @@ export async function createBoardStatus(req: Request, res: Response) {
       countsAsDone: req.body.countsAsDone,
       isDefault: req.body.isDefault
     }
+  });
   });
 
   emitRealtimeEvent({

@@ -5,6 +5,9 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { queryClient } from "./lib/queryClient";
 import "./styles.css";
+import "./product.css";
+import "./day.css";
+import "./responsive.css";
 
 const rootElement = document.getElementById("root");
 
@@ -21,3 +24,7 @@ createRoot(rootElement).render(
     </QueryClientProvider>
   </React.StrictMode>
 );
+
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => { void navigator.serviceWorker.register("/sw.js").catch(() => undefined); });
+}

@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import { readFile } from 'node:fs/promises';
+const source=await readFile('public/sw.js','utf8');
+function worker(clients=[]){const handlers={},shown=[],opened=[];const context={URL,self:{location:{origin:'https://vianko.test'},addEventListener:(name,fn)=>handlers[name]=fn,registration:{showNotification:async(title,options)=>shown.push({title,options})},clients:{matchAll:async()=>clients,openWindow:async url=>opened.push(url)}}};vm.runInNewContext(source,context);return{handlers,shown,opened};}
+test('push groups duplicate deliveries by id and retains its deep link',async()=>{const w=worker();let done;w.handlers.push({data:{json:()=>({id:'event',url:'/board?task=123'})},waitUntil:p=>done=p});await done;assert.equal(w.shown[0].options.tag,'event');assert.equal(w.shown[0].options.data.url,'/board?task=123');});
+test('click focuses an open app and navigates without reloading the document',async()=>{let path,focused=false,done;const w=worker([{url:'https://vianko.test/projects',postMessage:m=>path=m.navigate,focus:async()=>{focused=true;}}]);w.handlers.notificationclick({notification:{close(){},data:{url:'/board?task=123'}},waitUntil:p=>done=p});await done;assert.equal(path,'/board?task=123');assert.equal(focused,true);assert.equal(w.opened.length,0);});
+test('click opens a closed app, but never navigates to an external origin',async()=>{const w=worker();let done;const event=url=>({notification:{close(){},data:{url}},waitUntil:p=>done=p});w.handlers.notificationclick(event('/notifications'));await done;assert.deepEqual(w.opened,['https://vianko.test/notifications']);w.handlers.notificationclick(event('https://untrusted.test/'));assert.equal(w.opened.length,1);});
+test('authenticated API fetches are never handled by the service worker cache',()=>{const w=worker();let intercepted=false;w.handlers.fetch({request:{url:'https://vianko.test/api/v1/notifications',method:'GET',mode:'cors'},respondWith:()=>{intercepted=true;}});assert.equal(intercepted,false);});

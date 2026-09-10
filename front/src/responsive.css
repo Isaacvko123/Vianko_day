@@ -1,0 +1,270 @@
+/* Constrain the page itself; horizontal scrolling belongs to the board. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body, #root, .day-app {
+  width: 100%;
+  min-width: 0;
+}
+
+.day-app { overflow-x: clip; }
+.day-main, .day-main > *, .day-board, .day-board > *, .day-context > nav {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.day-main .board-layout {
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.day-board { width: 100%; }
+.day-board-heading > div:first-child { min-width: 0; }
+.day-board-heading h1, .day-task-open > strong { overflow-wrap: anywhere; }
+.day-board-heading > div > p:last-child { overflow-wrap: anywhere; }
+.day-navigation > button { color: #bfccdf; }
+.day-kanban { width: 100%; min-width: 0; overscroll-behavior-x: contain; }
+.day-project-back, .day-mobile-filter-toggle { display: none; }
+
+.day-board-tools {
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.day-board-search-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 260px;
+  min-width: 0;
+  max-width: 420px;
+}
+.day-board-search-row > .day-search { flex: 1; min-width: 0; min-height: 44px; }
+.day-board-search-row input { width: 100%; font-size: 14px; }
+.day-board-search-row svg { flex-shrink: 0; }
+.day-board-filter-controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.day-board-filter-controls[hidden] { display: none; }
+.day-board-filter-controls > label { font-size: 12px; min-width: 0; width: 190px; }
+.day-board-filter-controls select { min-width: 0; min-height: 44px; font-size: 13px; }
+.day-board-view-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 16px; }
+.day-board-view-row > span { color: #64748b; font-size: 13px; }
+.day-board-view-row .day-view-switch { margin: 0; padding: 3px; }
+.day-board-view-row .day-view-switch > button { min-height: 36px; font-size: 13px; padding: 7px 12px; gap: 6px; }
+.day-task-assignees { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; color: #536985; }
+.day-task-assignees .day-avatar-stack { flex-shrink: 0; }
+.day-assignee-label { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12px; }
+.day-task-status-label { flex-shrink: 0; max-width: 48%; padding: 7px 9px; background: #f1f5f9; color: #475569; border-radius: 6px; font-size: 12px; overflow-wrap: anywhere; }
+.day-task-meta { flex-wrap: wrap; }
+.day-task-meta .late { color: #b54738; }
+.day-task > footer { min-width: 0; }
+.day-board-swipe-hint { display: flex; align-items: center; gap: 7px; color: #64748b; font-size: 12px; margin: 0 0 12px; }
+
+@media (max-width: 700px) {
+  html { scroll-padding-top: 80px; scroll-padding-bottom: 90px; }
+  .day-header {
+    width: 100%;
+    min-height: 64px;
+    padding: max(8px, env(safe-area-inset-top)) 16px 8px;
+    gap: 12px;
+  }
+  .day-navigation { display: none; }
+  .day-logo { min-height: 44px; gap: 9px; }
+  .day-logo > span { width: 29px; height: 32px; font-size: 25px; }
+  .day-logo > strong { font-size: 22px; }
+  .day-logo strong span { color: #c1d0e4; }
+  .day-header-actions { min-width: 0; gap: 6px; }
+  .day-notifications, .day-account-toggle, .day-create {
+    min-width: 44px;
+    min-height: 44px;
+    justify-content: center;
+  }
+  .day-create { padding: 10px; }
+  .day-create > span, .day-account-toggle > svg { display: none; }
+  .day-account-toggle > span { width: 34px; height: 34px; font-size: 12px; }
+  .day-notifications b { top: 0; right: 0; }
+  .day-account-menu { width: min(280px, calc(100vw - 32px)); right: 0; }
+  .day-account-menu > button { min-height: 44px; font-size: 14px; }
+  .day-context { padding: 0 16px; height: 48px; width: 100%; gap: 0; }
+  .day-company, .day-live { display: none; }
+  .day-context > nav { width: 100%; gap: 22px; overflow-x: auto; scrollbar-width: none; }
+  .day-context nav > button { min-height: 44px; font-size: 13px; flex-shrink: 0; }
+  .day-app[data-view="board"] .day-context { display: none; }
+  .day-main, .day-main:has(.day-board) {
+    width: 100%;
+    padding: 20px 16px calc(96px + env(safe-area-inset-bottom));
+  }
+  .day-main:has(.day-board) { padding-top: 8px; }
+
+  .day-mobile-nav {
+    display: flex;
+    position: fixed;
+    inset: auto 0 0;
+    z-index: 40;
+    justify-content: space-around;
+    width: 100%;
+    padding: 6px 8px max(8px, env(safe-area-inset-bottom));
+    background: #fff;
+    border-top: 1px solid #dce3ed;
+    box-shadow: 0 -3px 16px #17243b08;
+  }
+  .day-mobile-nav > button {
+    min-width: 0;
+    min-height: 52px;
+    flex: 1;
+    padding: 5px 4px;
+    gap: 5px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    border: 0;
+    border-radius: 10px;
+    background: none;
+    color: #64748b;
+  }
+  .day-mobile-nav > button.selected { background: #eef4ff; color: #255ac4; }
+  .day-mobile-nav > button > svg { width: 21px; height: 21px; }
+
+  .day-project-back { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 0; border: 0; background: none; color: #536985; font-size: 13px; }
+  .day-board-heading { align-items: center; gap: 12px; margin: 8px 0 20px; }
+  .day-board-heading > div:first-child { flex: 1; }
+  .day-board-heading .day-kicker { font-size: 12px; line-height: 1.5; gap: 5px; flex-wrap: wrap; margin-bottom: 7px; }
+  .day-board-heading h1 { font-size: 26px; line-height: 1.2; letter-spacing: -.6px; }
+  .day-board-heading > div > p:last-child:not(.day-kicker) { font-size: 14px; line-height: 1.5; margin-top: 8px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .day-heading-actions { flex-shrink: 0; }
+  .day-heading-actions > .day-avatar-stack { display: none; }
+  .day-heading-actions > .day-button { min-height: 44px; padding: 10px 12px; font-size: 13px; gap: 6px; border-radius: 10px; }
+  .day-heading-actions > .day-button svg { width: 18px; }
+  .day-board-tabs { display: block; margin: 0 0 18px; border-bottom: 1px solid #dce3ed; }
+  .day-board-tabs > nav { display: flex; width: 100%; gap: 8px; overflow: visible; }
+  .day-board-tabs > nav > button { flex: 1 1 0; min-width: 0; min-height: 48px; justify-content: center; padding: 10px 3px 13px; font-size: 14px; gap: 6px; }
+  .day-board-tabs > nav > button svg { width: 17px; height: 17px; }
+  .day-board-tabs > nav span { font-size: 11px; margin: 0; padding: 2px 5px; }
+
+  .day-board-tools { display: block; margin: 0 0 16px; }
+  .day-board-search-row { width: 100%; max-width: none; min-width: 0; gap: 8px; }
+  .day-board-search-row > .day-search { width: auto; min-width: 0; min-height: 46px; padding: 0 11px; }
+  .day-board-search-row input { font-size: 16px; padding: 10px 0; }
+  .day-mobile-filter-toggle { display: inline-flex; flex-shrink: 0; gap: 6px; min-height: 46px; padding: 10px; font-size: 13px; background: white; }
+  .day-mobile-filter-toggle.has-filters { border-color: #255ac4; color: #255ac4; background: #f4f7ff; }
+  .day-mobile-filter-toggle b { font-size: 11px; }
+  .day-board-filter-controls { margin-top: 12px; padding: 14px; background: white; border: 1px solid #dce3ed; border-radius: 10px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 13px; }
+  .day-board-filter-controls > label { width: 100%; min-width: 0; font-size: 13px; }
+  .day-board-filter-controls select { width: 100%; font-size: 16px; min-height: 46px; }
+  .day-board-filter-controls > button { min-height: 44px; font-size: 14px; }
+  .day-board-view-row { margin-bottom: 14px; }
+  .day-board-view-row > span { font-size: 13px; }
+  .day-board-view-row .day-view-switch > button { min-height: 40px; padding: 8px 11px; font-size: 13px; gap: 6px; }
+  .day-mobile-statuses { display: flex; gap: 8px; width: 100%; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; padding: 0 0 14px; margin-bottom: 2px; }
+  .day-mobile-statuses > button { display: flex; align-items: center; flex: 0 0 auto; gap: 7px; min-height: 40px; border: 1px solid #dce3ed; background: white; color: #53647c; border-radius: 20px; padding: 8px 13px; font-size: 13px; white-space: nowrap; }
+  .day-mobile-statuses > button.selected { background: #eaf1ff; border-color: #98b7ea; color: #255ac4; }
+  .day-mobile-statuses > button > i { width: 6px; height: 6px; border-radius: 50%; }
+  .day-mobile-statuses > button > span { font-size: 12px; opacity: .8; }
+
+  .day-mobile-task-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .day-task { min-width: 0; width: 100%; border: 1px solid #dce3ed; border-radius: 12px; box-shadow: 0 2px 5px #17243b03; }
+  .day-task-open { padding: 16px 16px 12px; min-height: 44px; }
+  .day-task-open .day-priority { font-size: 11px; }
+  .day-task-open > strong { font-size: 16px; line-height: 1.45; margin-top: 9px; color: #24364e; }
+  .day-task-open > p { font-size: 14px; line-height: 1.5; margin-top: 6px; color: #64748b; }
+  .day-task-meta { padding: 0 16px 12px; gap: 10px 14px; font-size: 12px; color: #596b83; }
+  .day-task > footer { padding: 8px 12px; gap: 10px; min-height: 61px; background: #fcfdff; }
+  .day-task-assignees { min-height: 44px; gap: 8px; }
+  .day-task-assignees .day-avatar-stack > span { width: 30px; height: 30px; font-size: 11px; }
+  .day-task-assignees .day-assignee-label { font-size: 13px; line-height: 1.35; }
+  .day-task > footer select { width: auto; max-width: 47%; min-width: 0; min-height: 44px; font-size: 16px; padding: 8px; border: 1px solid #e0e7f1; background: #f2f5fa; color: #425b7a; }
+  .day-task-status-label { font-size: 13px; line-height: 1.4; }
+  .day-kanban { width: 100%; max-width: 100%; margin: 0; padding: 0 0 18px; gap: 12px; min-height: 0; scroll-snap-type: x mandatory; }
+  .day-column { flex: 0 0 calc(100% - 24px); min-width: 0; max-width: none; padding: 12px; scroll-snap-align: start; }
+  .day-column > header { min-height: 44px; padding: 0 0 12px; }
+  .day-column > header > h2 { font-size: 15px; }
+  .day-column > header > span { font-size: 13px; }
+  .day-column > header > button { min-width: 44px; min-height: 44px; padding: 10px; margin: -6px -6px -6px 0; }
+  .day-column-add { min-height: 44px; padding: 12px 0 0; font-size: 14px; }
+  .day-column-empty { font-size: 14px; padding: 24px 0; }
+  .day-project-people article p { overflow-wrap: anywhere; font-size: 14px; }
+  .day-project-people .day-button { min-height: 44px; font-size: 14px; }
+
+  /* Keep forms and conversations readable, including iOS input focus. */
+  .day-app input, .day-app textarea, .day-app select,
+  .product-dialog input, .product-dialog textarea, .product-dialog select,
+  .day-task-drawer input, .day-task-drawer textarea, .day-task-drawer select { font-size: 16px; min-width: 0; }
+  .product-dialog .day-button, .day-task-drawer .day-button { min-height: 44px; font-size: 14px; }
+  .day-task-drawer { width: 100%; max-width: 100vw; }
+  .day-detail-header { padding: max(12px, env(safe-area-inset-top)) 16px 0; }
+  .day-detail-header button { min-width: 44px; min-height: 44px; }
+  .day-detail-title { padding: 16px; }
+  .day-detail-title h1 { font-size: 24px; line-height: 1.3; overflow-wrap: anywhere; }
+  .day-detail-title select, .day-detail-subtasks > article > select { min-height: 44px; font-size: 16px; }
+  .task-action-bar { padding: 0 16px 16px; }
+  .task-action-bar > .day-button { min-height: 44px; font-size: 13px; }
+  .day-detail-tabs { min-width: 0; padding: 0 16px; }
+  .day-detail-tabs > button { min-height: 48px; font-size: 14px; }
+  .day-detail-scroll { padding: 20px 16px max(24px, env(safe-area-inset-bottom)); }
+  .day-detail-description > p, .day-comment p { font-size: 15px; line-height: 1.6; }
+  .day-comment > .person-avatar { width: 30px; height: 30px; font-size: 11px; }
+  .day-detail-grid { grid-template-columns: minmax(0, 1fr); }
+  .product-dialog-backdrop { padding: 0; }
+  .product-dialog { width: 100%; max-width: 100%; max-height: 94dvh; border-radius: 18px 18px 0 0; }
+  .product-dialog > header { padding: 20px 16px 16px; }
+  .product-dialog > header h2 { font-size: 22px; }
+  .product-dialog > header p { font-size: 14px; }
+  .product-dialog .product-form, .task-composer > fieldset { padding: 20px 16px; }
+  .product-form-actions, .task-composer > footer { padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  .day-main .roles-workbench, .day-main .organization-workbench { min-width: 0; }
+  .day-main .product-heading h1 { font-size: 27px; }
+  .day-main .product-heading > div > p:last-child { font-size: 14px; }
+  .day-main .product-heading > .day-button { min-height: 44px; font-size: 13px; }
+  .day-main .role-choice { min-width: 0; }
+  .day-main .role-choice small { font-size: 12px; }
+  .day-main .person-action, .day-main .product-pagination button { min-height: 44px; }
+  .day-form-steps > li { font-size: 12px; }
+  .notification-filter { flex-wrap: wrap; }
+  .notification-filter > label { font-size: 13px; width: 100%; }
+  .notification-filter select { min-height: 44px; font-size: 16px; flex: 1; }
+  .day-message { padding: 18px 16px; }
+  .day-message strong, .notification-context { font-size: 15px; }
+  .day-message p, .notification-footer > small { font-size: 13px; line-height: 1.5; }
+  .day-inbox-feed nav > button { min-height: 44px; font-size: 14px; }
+  .day-inbox-feed > header > .day-button { min-height: 44px; font-size: 13px; }
+  .project-chat-header { flex-wrap: wrap; padding: 16px; }
+  .project-chat-header h2 { font-size: 18px; }
+  .project-chat-header p { font-size: 13px; max-width: none; }
+  .project-chat-header > div:last-child { max-width: none; flex-wrap: wrap; width: 100%; justify-content: space-between; }
+  .project-chat-header > div:last-child > .day-button { min-height: 44px; font-size: 13px; padding: 8px; }
+  .chat-lifetime { font-size: 12px; }
+  .chat-main { height: max(430px, calc(100dvh - 300px)); }
+  .chat-status > span { font-size: 12px; }
+  .chat-status > small { display: none; }
+  .chat-bubble { min-width: 0; max-width: 100%; padding: 12px; }
+  .chat-bubble > p { font-size: 15px; line-height: 1.5; }
+  .chat-bubble header > strong { font-size: 13px; }
+  .chat-bubble time { font-size: 11px; }
+  .chat-bubble header > button { width: 36px; min-height: 36px; flex-shrink: 0; }
+  .chat-bubble header > button > svg { width: 16px; height: 16px; }
+  .chat-message > .person-avatar { width: 28px; height: 28px; font-size: 10px; }
+  .chat-file { min-width: 0; max-width: 100%; }
+  .chat-file-download { min-width: 0; min-height: 44px; }
+  .chat-file-download strong { font-size: 13px; }
+  .chat-file-delete { min-width: 36px; min-height: 44px; }
+  .chat-compose > textarea { font-size: 16px; min-height: 64px; }
+  .chat-compose footer > .day-button { min-height: 44px; font-size: 14px; }
+  .chat-start > p { font-size: 15px; }
+  .chat-start .day-button { min-height: 46px; font-size: 14px; white-space: normal; }
+  .chat-start > div > span { font-size: 13px; }
+}
+
+@media (max-width: 360px) {
+  .day-main, .day-main:has(.day-board) { padding-left: 12px; padding-right: 12px; }
+  .day-header { padding-left: 12px; padding-right: 12px; }
+  .day-board-heading h1 { font-size: 23px; }
+  .day-heading-actions > .day-button { padding: 10px; }
+  .day-board-search-row input { font-size: 16px; }
+  .day-mobile-filter-toggle { font-size: 12px; padding: 10px 8px; gap: 4px; }
+  .day-board-view-row .day-view-switch > button { padding-left: 8px; padding-right: 8px; }
+}

@@ -1,3 +1,4 @@
+import { permissionContext } from "../services/permission-context.js";
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 
@@ -7,5 +8,5 @@ export function requestContext(req: Request, res: Response, next: NextFunction) 
 
   req.requestId = requestId;
   res.setHeader("X-Request-Id", requestId);
-  next();
+  permissionContext.run(new Map(), next);
 }

@@ -1,19 +1,10 @@
-import { FormEvent, useMemo, useState } from "react";
-import {
-  ArrowDownToLine,
-  ArrowUpRight,
-  CheckCircle2,
-  ClipboardCheck,
-  Clock3,
-  Plus,
-  RefreshCw,
-  Send,
-  X,
-  XCircle
-} from "lucide-react";
-import type { Area, Locality, PaginationMeta, Position, Project, Role, StaffingRequest, StaffingRequestStatus, WorkspaceMember } from "../types";
-import { formatDate } from "../lib/format";
-
+import { useEffect, useState, type FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { ArrowRight, CheckCircle2, ChevronLeft, ChevronRight, Network, Plus } from 'lucide-react';
+import type { Area, Locality, PaginationMeta, Position, Project, Role, StaffingRequest, StaffingRequestStatus, WorkspaceMember } from '../types';
+import { formatDate } from '../lib/format';
+import { Button, EmptyState, LoadingState } from './ui';
+import { Dialog } from './ui/Dialog';
 type StaffingPageStatus = "PENDING" | "APPROVED" | "REJECTED";
 
 type ManagementViewProps = {
@@ -53,579 +44,64 @@ type ManagementViewProps = {
   onPageChange: (status: StaffingPageStatus, page: number) => void;
 };
 
-function readFormString(form: HTMLFormElement, fieldName: string) {
-  const value = new FormData(form).get(fieldName);
-  return typeof value === "string" ? value.trim() : "";
-}
 
-function readFormStringList(form: HTMLFormElement, fieldName: string) {
-  return new FormData(form)
-    .getAll(fieldName)
-    .filter((value): value is string => typeof value === "string")
-    .map((value) => value.trim())
-    .filter(Boolean);
-}
-
-function statusLabel(status: StaffingRequest["status"]) {
-  const labels: Record<StaffingRequest["status"], string> = {
-    PENDING: "Pendiente",
-    APPROVED: "Aprobada",
-    REJECTED: "Rechazada",
-    CANCELLED: "Cancelada"
-  };
-
-  return labels[status];
-}
-
-function memberLabel(member: WorkspaceMember) {
-  const localityNames = [
-    ...(member.locality?.name ? [member.locality.name] : []),
-    ...(member.localityScopes?.map((scope) => scope.locality.name) ?? [])
-  ];
-  const uniqueLocalityNames = [...new Set(localityNames)];
-
-  return `${member.user.name} · ${member.position?.name ?? "Sin puesto"} · ${uniqueLocalityNames.join(", ") || "Sin localidad"}`;
-}
-
-function totalPages(meta?: PaginationMeta) {
-  if (!meta) {
-    return 1;
-  }
-
-  return Math.max(1, Math.ceil(meta.total / meta.limit));
-}
-
-function pageRangeLabel(meta?: PaginationMeta) {
-  if (!meta || meta.total === 0) {
-    return "0 de 0";
-  }
-
-  const firstItem = meta.offset + 1;
-  const lastItem = Math.min(meta.offset + meta.limit, meta.total);
-  return `${firstItem}-${lastItem} de ${meta.total}`;
-}
-
-export function ManagementView({
-  staffingRequests,
-  staffingPagination,
-  staffingPages,
-  staffingPageSize,
-  projects,
-  members,
-  areas,
-  localities,
-  positions,
-  roles,
-  currentAreaId,
-  canAnswerAllRequests,
-  isLoading,
-  onRefresh,
-  onCreateStaffingRequest,
-  onApproveStaffingRequest,
-  onRejectStaffingRequest,
-  onPageChange
-}: ManagementViewProps) {
-  const [selectedTargetAreaId, setSelectedTargetAreaId] = useState("");
-  const [selectedTargetLocalityId, setSelectedTargetLocalityId] = useState("");
-  const [isRequestModalOpen, setIsRequestModalOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const incomingRequests = useMemo(
-    () => staffingRequests.filter((request) => currentAreaId && request.targetAreaId === currentAreaId),
-    [staffingRequests, currentAreaId]
-  );
-  const outgoingRequests = useMemo(
-    () => staffingRequests.filter((request) => !currentAreaId || request.targetAreaId !== currentAreaId),
-    [staffingRequests, currentAreaId]
-  );
-  const pendingRequests = staffingRequests.filter((request) => request.status === "PENDING");
-  const approvedRequests = staffingRequests.filter((request) => request.status === "APPROVED");
-  const rejectedRequests = staffingRequests.filter((request) => request.status === "REJECTED");
-  const pendingTotal = staffingPagination.PENDING?.total ?? pendingRequests.length;
-  const approvedTotal = staffingPagination.APPROVED?.total ?? approvedRequests.length;
-  const rejectedTotal = staffingPagination.REJECTED?.total ?? rejectedRequests.length;
-  const targetPositions = selectedTargetAreaId
-    ? positions.filter((position) => position.areaId === selectedTargetAreaId)
-    : positions;
-  const targetLocalities = selectedTargetAreaId
-    ? localities.filter((locality) => locality.areaId === selectedTargetAreaId)
-    : localities;
-
-  function candidatesForRequest(request: StaffingRequest) {
-    return members.filter((member) =>
-      member.status === "ACTIVE" &&
-      member.areaId === request.targetAreaId &&
-      memberMatchesLocality(member, request.targetLocalityId)
-    );
-  }
-
-  function memberMatchesLocality(member: WorkspaceMember, localityId?: string) {
-    if (!localityId) {
-      return true;
-    }
-
-    return member.localityId === localityId || Boolean(member.localityScopes?.some((scope) => scope.localityId === localityId));
-  }
-
-  function requestTargetLabel(request: StaffingRequest) {
-    const localityName = request.targetLocality?.name ?? "Cualquier localidad";
-    const positionName = request.position?.name ?? "Sin puesto especifico";
-    const requestedName = request.requestedUser?.name ? ` · ${request.requestedUser.name}` : "";
-
-    return `${request.targetArea.name} · ${localityName} · ${positionName}${requestedName}`;
-  }
-
-  function requestAssignmentsLabel(request: StaffingRequest) {
-    if (request.assignments.length === 0) {
-      return "Sin personas asignadas";
-    }
-
-    return request.assignments.map((assignment) => assignment.user.name).join(", ");
-  }
-
-  function canAnswerRequest(request: StaffingRequest) {
-    return canAnswerAllRequests || Boolean(currentAreaId && request.targetAreaId === currentAreaId);
-  }
-
-  function renderPagination(status: StaffingPageStatus) {
-    const meta = staffingPagination[status];
-    const activePage = staffingPages[status];
-    const lastPage = totalPages(meta);
-
-    return (
-      <nav className="staffing-pagination" aria-label={`Paginacion ${statusLabel(status)}`}>
-        <span>{pageRangeLabel(meta)}</span>
-        <div>
-          <button
-            className="secondary-action compact-action"
-            type="button"
-            disabled={activePage <= 1}
-            onClick={() => onPageChange(status, activePage - 1)}
-          >
-            Anterior
-          </button>
-          <strong>{activePage}/{lastPage}</strong>
-          <button
-            className="secondary-action compact-action"
-            type="button"
-            disabled={activePage >= lastPage}
-            onClick={() => onPageChange(status, activePage + 1)}
-          >
-            Siguiente
-          </button>
-        </div>
-      </nav>
-    );
-  }
-
-  async function handleCreate(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsSubmitting(true);
-
+const labels = { PENDING: 'Pendientes', APPROVED: 'Aprobadas', REJECTED: 'Rechazadas' };
+export function ManagementView({ staffingRequests, staffingPagination, staffingPages, projects, members, areas, localities, positions, isLoading, onCreateStaffingRequest, onApproveStaffingRequest, onRejectStaffingRequest, onPageChange }: ManagementViewProps) {
+  const [params, setParams] = useSearchParams();
+  const [status, setStatus] = useState<StaffingPageStatus>('PENDING');
+  const [modal, setModal] = useState<'create' | 'respond'>();
+  const [request, setRequest] = useState<StaffingRequest>();
+  const [projectId, setProjectId] = useState(params.get('project') ?? '');
+  const [targetAreaId, setTargetAreaId] = useState('');
+  const [targetLocalityId, setTargetLocalityId] = useState('');
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [decision, setDecision] = useState<'approve' | 'reject'>('approve');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const requestProjects = projects.filter(project => project.permissions?.includes('project.request_staffing'));
+  const project = projects.find(item => item.id === projectId);
+  useEffect(() => { if (params.get('create') === '1') { setModal('create'); setProjectId(params.get('project') ?? requestProjects[0]?.id ?? ''); } }, [params]);
+  const linkedId = params.get('request');
+  const linked = staffingRequests.find(item => item.id === linkedId);
+  useEffect(() => { if (linked && linked.status !== 'CANCELLED') setStatus(linked.status); }, [linkedId, linked?.status]);
+  function close() { setModal(undefined); if (params.has('create')) { const next = new URLSearchParams(params); next.delete('create'); setParams(next, { replace: true }); } }
+  const rows = staffingRequests.filter(item => item.status === status);
+  const meta = staffingPagination[status]; const page = staffingPages[status]; const pages = Math.max(1, Math.ceil((meta?.total ?? 0) / (meta?.limit || 8)));
+  const candidates = request ? members.filter(member => member.status === 'ACTIVE' && member.userType === 'INTERNAL' && member.areaId === request.targetAreaId && (!request.positionId || member.positionId === request.positionId) && (!request.targetLocalityId || member.localityId === request.targetLocalityId || member.localityScopes?.some(scope => scope.localityId === request.targetLocalityId))) : [];
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(''); const form = new FormData(event.currentTarget);
+    const read = (name: string) => String(form.get(name) ?? '').trim();
     try {
-      const form = event.currentTarget;
-      const note = readFormString(form, "note");
-      const targetLocalityId = readFormString(form, "targetLocalityId");
-      const positionId = readFormString(form, "positionId");
-      const roleId = readFormString(form, "roleId");
-      const requestedUserId = readFormString(form, "requestedUserId");
-      await onCreateStaffingRequest({
-        projectId: readFormString(form, "projectId"),
-        targetAreaId: readFormString(form, "targetAreaId"),
-        targetLocalityId: targetLocalityId || undefined,
-        positionId: positionId || undefined,
-        roleId: roleId || undefined,
-        requestedUserId: requestedUserId || undefined,
-        quantity: Number(readFormString(form, "quantity") || 1),
-        note: note || undefined
-      });
-      form.reset();
-      setSelectedTargetAreaId("");
-      setSelectedTargetLocalityId("");
-      setIsRequestModalOpen(false);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo crear la solicitud.");
-    } finally {
-      setIsSubmitting(false);
-    }
+      if (modal === 'create') {
+        await onCreateStaffingRequest({ projectId, targetAreaId, targetLocalityId: targetLocalityId || undefined, positionId: read('positionId') || undefined, quantity: Number(read('quantity')), note: read('note') || undefined });
+        setStatus('PENDING');
+      } else if (request) {
+        if (decision === 'approve') { if (!selectedIds.length || selectedIds.length > request.quantity) throw new Error(`Selecciona entre 1 y ${request.quantity} personas.`); await onApproveStaffingRequest({ requestId: request.id, approvedUserIds: selectedIds, responseNote: read('responseNote') || undefined }); }
+        else await onRejectStaffingRequest({ requestId: request.id, responseNote: read('responseNote') });
+      }
+      close();
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'No se pudo guardar la solicitud.'); }
+    finally { setBusy(false); }
   }
-
-  async function handleApprove(event: FormEvent<HTMLFormElement>, requestId: string) {
-    event.preventDefault();
-    setErrorMessage("");
-
-    try {
-      const form = event.currentTarget;
-      const responseNote = readFormString(form, "responseNote");
-      const approvedUserIds = readFormStringList(form, "approvedUserIds");
-      await onApproveStaffingRequest({
-        requestId,
-        approvedUserIds,
-        responseNote: responseNote || undefined
-      });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo aprobar la solicitud.");
-    }
-  }
-
-  async function handleReject(event: FormEvent<HTMLFormElement>, requestId: string) {
-    event.preventDefault();
-    setErrorMessage("");
-
-    try {
-      const form = event.currentTarget;
-      const responseNote = readFormString(form, "responseNote");
-      await onRejectStaffingRequest({
-        requestId,
-        responseNote
-      });
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo rechazar la solicitud.");
-    }
-  }
-
-  return (
-    <section className="page management-page">
-      <header className="page-heading management-hero">
-        <div>
-          <p className="eyebrow">Gerencia</p>
-          <h1>Solicitudes entre areas</h1>
-          <p className="hero-copy">Pide apoyo a otra area, acepta personal disponible y deja rastro de cada decision.</p>
-        </div>
-        <div className="header-actions">
-          <button className="ghost-button" type="button" onClick={onRefresh}>
-            <RefreshCw size={17} />
-            Actualizar
-          </button>
-          <button className="primary-action" type="button" data-guide="management-new-request" onClick={() => setIsRequestModalOpen(true)}>
-            <Plus size={18} />
-            Nueva solicitud
-          </button>
-        </div>
-      </header>
-
-      {errorMessage ? <p className="form-error">{errorMessage}</p> : undefined}
-
-      <section className="staffing-summary-grid" data-guide="management-stats">
-        <article>
-          <span><ArrowDownToLine size={18} /></span>
-          <small>Entrantes</small>
-          <strong>{incomingRequests.length}</strong>
-        </article>
-        <article>
-          <span><ArrowUpRight size={18} /></span>
-          <small>Enviadas</small>
-          <strong>{outgoingRequests.length}</strong>
-        </article>
-        <article>
-          <span><Clock3 size={18} /></span>
-          <small>Pendientes</small>
-          <strong>{pendingTotal}</strong>
-        </article>
-        <article>
-          <span><ClipboardCheck size={18} /></span>
-          <small>Aprobadas</small>
-          <strong>{approvedTotal}</strong>
-        </article>
-        <article>
-          <span><XCircle size={18} /></span>
-          <small>Rechazadas</small>
-          <strong>{rejectedTotal}</strong>
-        </article>
-      </section>
-
-      <section className="management-flow">
-        <article>
-          <strong>1</strong>
-          <span>Solicita apoyo con proyecto, area destino y puesto.</span>
-        </article>
-        <article>
-          <strong>2</strong>
-          <span>El gerente destino valida disponibilidad real.</span>
-        </article>
-        <article>
-          <strong>3</strong>
-          <span>Al aprobar, las personas quedan ligadas al proyecto.</span>
-        </article>
-      </section>
-
-      <section className="staffing-table-card" data-guide="management-incoming">
-        <header>
-          <div>
-            <h2><ArrowDownToLine size={18} /> Pendientes por responder</h2>
-            <p>Solicitudes abiertas, ligadas siempre a un proyecto concreto.</p>
-          </div>
-          <span>{pendingTotal}</span>
-        </header>
-        {renderPagination("PENDING")}
-        {isLoading ? <div className="empty-state">Cargando solicitudes...</div> : undefined}
-        {!isLoading && pendingRequests.length === 0 ? <div className="empty-state">No hay solicitudes pendientes.</div> : undefined}
-        {pendingRequests.length > 0 ? (
-          <div className="staffing-table" role="table" aria-label="Solicitudes pendientes">
-            <div className="staffing-table-head" role="row">
-              <span>Proyecto</span>
-              <span>Solicitud</span>
-              <span>Solicita</span>
-              <span>Fecha</span>
-              <span>Respuesta</span>
-            </div>
-            {pendingRequests.map((request) => {
-              const candidates = candidatesForRequest(request);
-              const canAnswer = canAnswerRequest(request);
-
-              return (
-                <article className="staffing-table-row" role="row" key={request.id}>
-                  <div>
-                    <strong>{request.project.name}</strong>
-                    <small>{request.project.area?.name ?? "Sin area"} · {request.project.locality?.name ?? "Sin localidad"}</small>
-                  </div>
-                  <div>
-                    <strong>{requestTargetLabel(request)}</strong>
-                    <small>{request.quantity} persona{request.quantity === 1 ? "" : "s"} · {request.role?.name ?? "Rol original"}</small>
-                    {request.note ? <p>{request.note}</p> : undefined}
-                  </div>
-                  <div>
-                    <strong>{request.requester.name}</strong>
-                    <small>{request.sourceArea?.name ?? "Sin area origen"}</small>
-                  </div>
-                  <div>
-                    <strong>{formatDate(request.createdAt)}</strong>
-                    <em className="status-pill status-pending">{statusLabel(request.status)}</em>
-                  </div>
-                  <div className="staffing-table-actions">
-                    {canAnswer ? (
-                      <>
-                        <form className="staffing-inline-form" onSubmit={(event) => void handleApprove(event, request.id)}>
-                          <select name="approvedUserIds" multiple required aria-label="Personal disponible">
-                            {candidates.map((member) => (
-                              <option key={member.userId} value={member.userId}>{memberLabel(member)}</option>
-                            ))}
-                          </select>
-                          <input name="responseNote" placeholder="Nota de aprobacion" />
-                          <button className="primary-action compact-action" type="submit" disabled={candidates.length === 0}>
-                            <CheckCircle2 size={16} />
-                            Aprobar
-                          </button>
-                        </form>
-                        <form className="staffing-inline-form" onSubmit={(event) => void handleReject(event, request.id)}>
-                          <input name="responseNote" placeholder="Motivo de rechazo" minLength={2} required />
-                          <button className="secondary-action compact-action danger-soft" type="submit">
-                            <XCircle size={16} />
-                            Rechazar
-                          </button>
-                        </form>
-                      </>
-                    ) : (
-                      <span className="muted">Esperando al gerente del area destino.</span>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        ) : undefined}
-        {pendingRequests.length > 0 ? renderPagination("PENDING") : undefined}
-      </section>
-
-      <section className="staffing-table-card" data-guide="management-outgoing">
-        <header>
-          <div>
-            <h2><ClipboardCheck size={18} /> Aprobadas</h2>
-            <p>Solicitudes cerradas con personas asignadas al proyecto.</p>
-          </div>
-          <span>{approvedTotal}</span>
-        </header>
-        {renderPagination("APPROVED")}
-        {approvedRequests.length === 0 ? <div className="empty-state">Aun no hay solicitudes aprobadas.</div> : undefined}
-        {approvedRequests.length > 0 ? (
-          <div className="staffing-table staffing-table-history" role="table" aria-label="Historial de solicitudes">
-            <div className="staffing-table-head" role="row">
-              <span>Proyecto</span>
-              <span>Resultado</span>
-              <span>Personal</span>
-              <span>Respondio</span>
-              <span>Motivo o nota</span>
-            </div>
-            {approvedRequests.map((request) => (
-              <article className="staffing-table-row" role="row" key={request.id}>
-                <div>
-                  <strong>{request.project.name}</strong>
-                  <small>{requestTargetLabel(request)}</small>
-                </div>
-                <div>
-                  <em className={`status-pill status-${request.status.toLowerCase()}`}>{statusLabel(request.status)}</em>
-                  <small>{request.respondedAt ? formatDate(request.respondedAt) : "Sin fecha de cierre"}</small>
-                </div>
-                <div>
-                  <strong>{requestAssignmentsLabel(request)}</strong>
-                  <small>{request.quantity} solicitado{request.quantity === 1 ? "" : "s"}</small>
-                </div>
-                <div>
-                  <strong>{request.responder?.name ?? "Sin responsable"}</strong>
-                  <small>{request.targetArea.name}</small>
-                </div>
-                <p>{request.responseNote || request.note || "Sin nota registrada."}</p>
-              </article>
-            ))}
-          </div>
-        ) : undefined}
-        {approvedRequests.length > 0 ? renderPagination("APPROVED") : undefined}
-      </section>
-
-      <section className="staffing-table-card" data-guide="management-rejected">
-        <header>
-          <div>
-            <h2><XCircle size={18} /> Rechazadas</h2>
-            <p>Solicitudes no aprobadas con motivo obligatorio para seguimiento.</p>
-          </div>
-          <span>{rejectedTotal}</span>
-        </header>
-        {renderPagination("REJECTED")}
-        {rejectedRequests.length === 0 ? <div className="empty-state">No hay solicitudes rechazadas.</div> : undefined}
-        {rejectedRequests.length > 0 ? (
-          <div className="staffing-table staffing-table-history" role="table" aria-label="Solicitudes rechazadas">
-            <div className="staffing-table-head" role="row">
-              <span>Proyecto</span>
-              <span>Resultado</span>
-              <span>Personal</span>
-              <span>Respondio</span>
-              <span>Motivo</span>
-            </div>
-            {rejectedRequests.map((request) => (
-              <article className="staffing-table-row" role="row" key={request.id}>
-                <div>
-                  <strong>{request.project.name}</strong>
-                  <small>{requestTargetLabel(request)}</small>
-                </div>
-                <div>
-                  <em className={`status-pill status-${request.status.toLowerCase()}`}>{statusLabel(request.status)}</em>
-                  <small>{request.respondedAt ? formatDate(request.respondedAt) : "Sin fecha de cierre"}</small>
-                </div>
-                <div>
-                  <strong>{requestAssignmentsLabel(request)}</strong>
-                  <small>{request.quantity} solicitado{request.quantity === 1 ? "" : "s"}</small>
-                </div>
-                <div>
-                  <strong>{request.responder?.name ?? "Sin responsable"}</strong>
-                  <small>{request.targetArea.name}</small>
-                </div>
-                <p>{request.responseNote || "Sin motivo registrado."}</p>
-              </article>
-            ))}
-          </div>
-        ) : undefined}
-        {rejectedRequests.length > 0 ? renderPagination("REJECTED") : undefined}
-      </section>
-
-      {isRequestModalOpen ? (
-        <div className="modal-backdrop" role="presentation">
-          <section className="task-modal admin-modal" role="dialog" aria-modal="true">
-            <header className="modal-header">
-              <div>
-                <p className="eyebrow">Solicitud</p>
-                <h2>Solicitar apoyo</h2>
-              </div>
-              <button className="icon-button" type="button" onClick={() => setIsRequestModalOpen(false)} aria-label="Cerrar modal">
-                <X size={18} />
-              </button>
-            </header>
-
-            <form className="form-stack admin-modal-form" onSubmit={handleCreate}>
-              <label>
-                Proyecto
-                <select name="projectId" required defaultValue="">
-                  <option value="">Seleccionar</option>
-                  {projects.map((project) => (
-                    <option key={project.id} value={project.id}>{project.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Area destino
-                <select
-                  name="targetAreaId"
-                  required
-                  value={selectedTargetAreaId}
-                  onChange={(event) => {
-                    setSelectedTargetAreaId(event.currentTarget.value);
-                    setSelectedTargetLocalityId("");
-                  }}
-                >
-                  <option value="">Seleccionar</option>
-                  {areas.map((area) => (
-                    <option key={area.id} value={area.id}>{area.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Localidad destino
-                <select
-                  name="targetLocalityId"
-                  key={selectedTargetAreaId}
-                  value={selectedTargetLocalityId}
-                  onChange={(event) => setSelectedTargetLocalityId(event.currentTarget.value)}
-                >
-                  <option value="">Cualquier localidad</option>
-                  {targetLocalities.map((locality) => (
-                    <option key={locality.id} value={locality.id}>{locality.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Puesto requerido
-                <select name="positionId" key={selectedTargetAreaId} defaultValue="">
-                  <option value="">Sin puesto especifico</option>
-                  {targetPositions.map((position) => (
-                    <option key={position.id} value={position.id}>{position.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Rol en proyecto
-                <select name="roleId" defaultValue="">
-                  <option value="">Rol del usuario</option>
-                  {roles.map((role) => (
-                    <option key={role.id} value={role.id}>{role.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Cantidad
-                <input name="quantity" type="number" min={1} max={25} defaultValue={1} />
-              </label>
-              <label>
-                Persona especifica
-                <select name="requestedUserId" defaultValue="">
-                  <option value="">Sin persona especifica</option>
-                  {members
-                    .filter((member) =>
-                      (!selectedTargetAreaId || member.areaId === selectedTargetAreaId) &&
-                      memberMatchesLocality(member, selectedTargetLocalityId || undefined)
-                    )
-                    .map((member) => (
-                      <option key={member.userId} value={member.userId}>{memberLabel(member)}</option>
-                    ))}
-                </select>
-              </label>
-              <label className="wide-field">
-                Nota
-                <textarea name="note" rows={4} placeholder="Contexto del apoyo solicitado" />
-              </label>
-              <div className="modal-actions">
-                <button className="secondary-action" type="button" onClick={() => setIsRequestModalOpen(false)}>
-                  Cancelar
-                </button>
-                <button className="primary-action" type="submit" disabled={isSubmitting}>
-                  <Send size={18} />
-                  {isSubmitting ? "Solicitando..." : "Crear solicitud"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      ) : undefined}
-    </section>
-  );
+  return <section className="page product-page">
+    <header className="product-heading"><div><p className="eyebrow">Colaboración entre áreas</p><h1>Solicitudes de apoyo</h1><p>Pide personas para un proyecto. El responsable del área elige quién puede apoyar.</p></div>{requestProjects.length > 0 && <Button variant="primary" icon={<Plus size={17} />} onClick={() => { setError(''); setProjectId(requestProjects[0]?.id ?? ''); setTargetAreaId(''); setTargetLocalityId(''); setModal('create'); }}>Pedir apoyo</Button>}</header>
+    <div className="request-flow"><span><i>1</i> Solicitas apoyo</span><ArrowRight size={14} /><span><i>2</i> El área asigna personas</span><ArrowRight size={14} /><span><i>3</i> Se incorporan al proyecto</span></div>
+    <div className="product-toolbar"><div className="product-tabs" aria-label="Estado de solicitudes">{(Object.keys(labels) as StaffingPageStatus[]).map(value => <button key={value} className={status === value ? 'active' : ''} onClick={() => setStatus(value)}>{labels[value]}<span>{staffingPagination[value]?.total ?? 0}</span></button>)}</div></div>
+    {isLoading && !staffingRequests.length && <LoadingState label="Cargando solicitudes…" rows={3} />}
+    <div className="request-list">{rows.map(item => <article className={`request-card ${item.id === linkedId ? 'linked-request' : ''}`} key={item.id} id={`request-${item.id}`}><span className="request-icon"><Network size={20} /></span><div className="request-info"><div><h2>{item.project.name}</h2>{item.canRespond && <span className="subtle-tag attention-tag">Requiere tu respuesta</span>}</div><p>{item.quantity} {item.quantity === 1 ? 'persona de' : 'personas de'} <strong>{item.targetArea.name}</strong>{item.targetLocality && ` · ${item.targetLocality.name}`}{item.position && ` · ${item.position.name}`}</p>{item.note && <p className="request-note">{item.note}</p>}<small>{item.requester.name} · {formatDate(item.createdAt)}</small>{item.status === 'APPROVED' && <div className="request-outcome"><CheckCircle2 size={15} /><span>{item.assignments.map(assignment => assignment.user.name).join(', ') || 'Personal incorporado'}</span></div>}{item.responseNote && <p className="request-note">Respuesta: {item.responseNote}</p>}</div>{item.canRespond && <Button size="sm" onClick={() => { setRequest(item); setSelectedIds([]); setDecision('approve'); setError(''); setModal('respond'); }}>Resolver</Button>}{item.status === 'PENDING' && !item.canRespond && <span className="waiting-label">Esperando al área</span>}</article>)}</div>
+    {!isLoading && !rows.length && <EmptyState icon={<Network size={25} />} title={status === 'PENDING' ? 'No hay solicitudes pendientes' : `No hay solicitudes ${labels[status].toLowerCase()}`} description="Las solicitudes y sus respuestas quedan registradas aquí para darles seguimiento." />}
+    {(meta?.total ?? 0) > 0 && <footer className="product-pagination"><span>{meta?.total} solicitudes</span><div><Button size="sm" aria-label="Página anterior" disabled={page <= 1 || isLoading} onClick={() => onPageChange(status, page - 1)}><ChevronLeft size={17} /></Button><span>Página {page} de {pages}</span><Button size="sm" aria-label="Página siguiente" disabled={page >= pages || isLoading} onClick={() => onPageChange(status, page + 1)}><ChevronRight size={17} /></Button></div></footer>}
+    {modal && <Dialog title={modal === 'create' ? 'Pedir apoyo a otra área' : 'Resolver solicitud'} description={modal === 'create' ? 'El área destino recibirá la solicitud y decidirá a quién asignar.' : `${request?.project.name} · ${request?.quantity} personas solicitadas`} busy={busy} onClose={close}><form className="product-form" onSubmit={submit}>{modal === 'create' ? <>
+      <label>Proyecto que necesita apoyo<select required value={projectId} onChange={event => { setProjectId(event.target.value); setTargetAreaId(''); setTargetLocalityId(''); }}><option value="" disabled>Selecciona un proyecto</option>{requestProjects.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+      <div className="form-two-columns"><label>Área a la que solicitas<select required value={targetAreaId} onChange={event => { setTargetAreaId(event.target.value); setTargetLocalityId(''); }}><option value="" disabled>Selecciona un área</option>{areas.filter(area => area.id !== project?.areaId).map(area => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label><label>Personas necesarias<input name="quantity" type="number" min={1} max={25} required defaultValue={1} /></label></div>
+      <label>Para qué necesitas apoyo<textarea name="note" rows={3} maxLength={2000} placeholder="Ej. Dos personas para el inventario de esta semana." /></label>
+      <details className="form-details"><summary>Localidad y puesto <span>Opcional</span></summary><div className="form-two-columns"><label>Localidad<select disabled={!targetAreaId} value={targetLocalityId} onChange={event => setTargetLocalityId(event.target.value)}><option value="">Cualquier localidad</option>{localities.filter(item => item.areaId === targetAreaId).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>Puesto<select name="positionId" key={targetAreaId} disabled={!targetAreaId} defaultValue=""><option value="">Cualquier puesto</option>{positions.filter(item => item.areaId === targetAreaId).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label></div></details>
+    </> : <>
+      {request?.note && <div className="scope-note"><strong>Motivo de la solicitud</strong>{request.note}</div>}
+      <div className="product-tabs"><button type="button" className={decision === 'approve' ? 'active' : ''} onClick={() => setDecision('approve')}>Asignar apoyo</button><button type="button" className={decision === 'reject' ? 'active' : ''} onClick={() => setDecision('reject')}>Rechazar</button></div>
+      {decision === 'approve' && <fieldset><legend>Selecciona hasta {request?.quantity} personas · {selectedIds.length} seleccionadas</legend><div className="staff-candidates">{candidates.map(member => <label key={member.id}><input type="checkbox" checked={selectedIds.includes(member.userId)} disabled={!selectedIds.includes(member.userId) && selectedIds.length >= (request?.quantity ?? 0)} onChange={event => setSelectedIds(ids => event.target.checked ? [...ids, member.userId] : ids.filter(id => id !== member.userId))} /><span><strong>{member.user.name}</strong><small>{member.position?.name ?? 'Colaborador'} · {member.locality?.name ?? 'Toda el área'}</small></span></label>)}</div>{!candidates.length && <p className="inline-empty">No hay personas disponibles que coincidan con el área, localidad y puesto solicitados.</p>}</fieldset>}
+      <label>{decision === 'reject' ? 'Motivo del rechazo' : 'Nota de respuesta (opcional)'}<textarea name="responseNote" key={decision} required={decision === 'reject'} minLength={decision === 'reject' ? 2 : undefined} maxLength={2000} rows={2} /></label>
+      {decision === 'approve' && <p className="scope-note">Las personas seleccionadas se incorporarán al proyecto con su rol actual. Después, la coordinación podrá asignarles tareas.</p>}
+    </>}{error && <p className="form-error" role="alert">{error}</p>}<footer className="product-form-actions"><Button disabled={busy} onClick={close}>Cancelar</Button><Button type="submit" variant={modal === 'respond' && decision === 'reject' ? 'danger' : 'primary'} disabled={busy || (modal === 'respond' && decision === 'approve' && !selectedIds.length)}>{busy ? 'Guardando…' : modal === 'create' ? 'Enviar solicitud' : decision === 'approve' ? 'Asignar personas' : 'Rechazar solicitud'}</Button></footer></form></Dialog>}
+  </section>;
 }

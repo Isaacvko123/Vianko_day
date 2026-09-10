@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { connectRealtime, type RealtimeClientError, type RealtimeEvent, type RealtimeSocket } from "../realtime/socket";
 
 type SilentLoadOptions = {
@@ -18,6 +18,7 @@ type RealtimeRefreshPlan = {
 };
 
 type RealtimeRefreshHandlers = {
+  notifications: () => void;
   workspaces: () => void;
   projects: (options?: SilentLoadOptions) => void;
   catalog: (options?: SilentLoadOptions) => void;
@@ -53,6 +54,7 @@ function emptyRealtimeRefreshPlan(): RealtimeRefreshPlan {
 }
 
 export function useRealtimeSync(options: RealtimeSyncOptions) {
+  const [connectionState, setConnectionState] = useState<"connecting" | "live" | "reconnecting">("connecting");
   const socketRef = useRef<RealtimeSocket>();
   const joinedWorkspaceIdRef = useRef<string>();
   const joinedProjectIdRef = useRef<string>();
@@ -124,25 +126,25 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
   }
 
   function queueRealtimeRefresh(event: RealtimeEvent) {
+    if (event.type === "notification.read" || event.type.startsWith("chat.")) return;
     const { canLoadManagementData } = latestOptionsRef.current;
+    const workspaceEvent = event.type.startsWith("workspace.");
+    const projectEvent = event.type.startsWith("project.");
+    const staffingEvent = event.type.startsWith("staffing.");
 
     mergeRealtimeRefreshPlan({
-      workspaces: event.type.startsWith("workspace."),
-      projects: true,
-      catalog: true,
-      members: canLoadManagementData,
-      management: canLoadManagementData,
+      workspaces: workspaceEvent,
+      projects: workspaceEvent || projectEvent,
+      catalog: workspaceEvent,
+      members: canLoadManagementData && (workspaceEvent || projectEvent),
+      management: canLoadManagementData && staffingEvent,
       reports: true,
       completedArchive: true,
-      projectId: activeProjectIdRef.current,
-      taskId: selectedTaskIdRef.current
+      projectId: workspaceEvent || event.projectId === activeProjectIdRef.current ? activeProjectIdRef.current : undefined,
+      taskId: workspaceEvent || event.taskId === selectedTaskIdRef.current ? selectedTaskIdRef.current : undefined
     });
 
-    if (realtimeRefreshTimerRef.current) {
-      window.clearTimeout(realtimeRefreshTimerRef.current);
-    }
-
-    realtimeRefreshTimerRef.current = window.setTimeout(flushRealtimeRefresh, 220);
+    if (!realtimeRefreshTimerRef.current) realtimeRefreshTimerRef.current = window.setTimeout(flushRealtimeRefresh, 160);
   }
 
   function joinWorkspaceRealtime(socket: RealtimeSocket, nextWorkspaceId: string) {
@@ -192,10 +194,17 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       return undefined;
     }
 
+    setConnectionState("connecting");
     const socket = connectRealtime(options.token);
     socketRef.current = socket;
 
+    socket.on("disconnect", () => setConnectionState("reconnecting"));
     socket.on("connect", () => {
+      setConnectionState("live");
+      latestOptionsRef.current.refresh.notifications();
+      latestOptionsRef.current.refresh.projects({ silent: true });
+      if (activeProjectIdRef.current) latestOptionsRef.current.refresh.projectContext(activeProjectIdRef.current, { silent: true });
+      if (selectedTaskIdRef.current) latestOptionsRef.current.refresh.taskDetail(selectedTaskIdRef.current, { silent: true });
       const currentOptions = latestOptionsRef.current;
       if (!currentOptions.workspaceId) {
         return;
@@ -212,12 +221,17 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       }
     });
 
+    const seenEventIds = new Set<string>();
     socket.on("realtime:event", (event) => {
+      if (seenEventIds.has(event.id)) return;
+      seenEventIds.add(event.id);
+      if (seenEventIds.size > 400) seenEventIds.delete(seenEventIds.values().next().value!);
       latestOptionsRef.current.onEvent(event);
       queueRealtimeRefresh(event);
     });
     socket.on("realtime:error", (error) => latestOptionsRef.current.onError(error));
     socket.on("connect_error", (error) => {
+      setConnectionState("reconnecting");
       if (error.message === "AUTH_INVALID") {
         latestOptionsRef.current.onError({
           code: "AUTH_INVALID",
@@ -268,4 +282,5 @@ export function useRealtimeSync(options: RealtimeSyncOptions) {
       joinedTaskIdRef.current = undefined;
     }
   }, [options.selectedTaskId]);
+  return { connectionState };
 }

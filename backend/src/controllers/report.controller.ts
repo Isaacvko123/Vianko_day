@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db/prisma.js";
-import { assertProjectPermission, assertWorkspacePermission } from "../services/access-control.service.js";
+import { assertProjectPermission, assertWorkspacePermission, projectVisibilityFilter } from "../services/access-control.service.js";
 import { getParam } from "../utils/request.js";
 
 type QueryNumber = number | bigint | Prisma.Decimal | undefined;
@@ -172,6 +172,7 @@ export async function projectProgress(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const projectId = getParam(req, "projectId");
   const { project } = await assertProjectPermission(userId, projectId, "report.view_project");
+  await assertProjectPermission(userId, projectId, "task.create");
 
   // Primero agregamos tiempo por tarea; unir TimeLog directo duplica estimaciones.
   const [summary] = await prisma.$queryRaw<ProjectProgressRow[]>(
@@ -222,7 +223,13 @@ export async function workspaceSummary(req: Request, res: Response) {
   const workspaceId = getParam(req, "workspaceId");
   const reportPeriod = getReportPeriod(req);
 
-  await assertWorkspacePermission(userId, workspaceId, "report.view_workspace");
+  const member = await assertWorkspacePermission(userId, workspaceId, "report.view_workspace");
+  const allowedProjects = await prisma.project.findMany({ where: { workspaceId, deletedAt: null,
+    ...await projectVisibilityFilter(userId, member) }, select: { id: true } });
+  const allowedIds = allowedProjects.map((project) => project.id);
+  const scopeSql = (alias: "t" | "root" | "p") => allowedIds.length
+    ? Prisma.sql`AND ${Prisma.raw(`"${alias}".${alias === "p" ? 'id' : '"projectId"'}`)} IN (${Prisma.join(allowedIds)})`
+    : Prisma.sql`AND FALSE`;
 
   const projectProgressRows = await prisma.$queryRaw<ProjectProgressRow[]>(
     Prisma.sql`
@@ -234,6 +241,7 @@ export async function workspaceSummary(req: Request, res: Response) {
         LEFT JOIN "TimeLog" tl ON tl."taskId" = t.id AND tl."deletedAt" IS NULL
           AND tl."logDate" BETWEEN ${reportPeriod.start} AND ${reportPeriod.end}
         WHERE t."workspaceId" = ${workspaceId}
+          ${scopeSql("t")}
           AND t."deletedAt" IS NULL
           ${taskPeriodSql("t", reportPeriod.start, reportPeriod.end)}
         GROUP BY t.id
@@ -261,6 +269,7 @@ export async function workspaceSummary(req: Request, res: Response) {
       LEFT JOIN "BoardStatus" bs ON bs.id = t."statusId"
       LEFT JOIN task_time ON task_time.task_id = t.id
       WHERE p."workspaceId" = ${workspaceId}
+          ${scopeSql("p")}
         AND p."deletedAt" IS NULL
       GROUP BY p.id, p.name
       ORDER BY p.name
@@ -283,6 +292,7 @@ export async function workspaceSummary(req: Request, res: Response) {
         JOIN "Task" t ON t.id = ta."taskId"
         JOIN "BoardStatus" bs ON bs.id = t."statusId"
         WHERE t."workspaceId" = ${workspaceId}
+          ${scopeSql("t")}
           AND t."deletedAt" IS NULL
           ${taskPeriodSql("t", reportPeriod.start, reportPeriod.end)}
         GROUP BY ta."userId"
@@ -294,6 +304,7 @@ export async function workspaceSummary(req: Request, res: Response) {
         FROM "TimeLog" tl
         JOIN "Task" t ON t.id = tl."taskId"
         WHERE t."workspaceId" = ${workspaceId}
+          ${scopeSql("t")}
           AND t."deletedAt" IS NULL
           AND tl."deletedAt" IS NULL
           AND tl."logDate" BETWEEN ${reportPeriod.start} AND ${reportPeriod.end}
@@ -314,7 +325,7 @@ export async function workspaceSummary(req: Request, res: Response) {
       JOIN "WorkspaceMember" wm ON wm."userId" = u.id AND wm."workspaceId" = ${workspaceId}
       LEFT JOIN assigned_tasks ON assigned_tasks.user_id = u.id
       LEFT JOIN user_time ON user_time.user_id = u.id
-      WHERE wm.status = 'ACTIVE'
+      WHERE wm.status = 'ACTIVE' AND (assigned_tasks.user_id IS NOT NULL OR user_time.user_id IS NOT NULL)
       GROUP BY u.id, u.name, assigned_tasks.assigned_tasks, assigned_tasks.active_tasks, assigned_tasks.completed_tasks, assigned_tasks.overdue_tasks, assigned_tasks.blocked_tasks, assigned_tasks.late_tasks, assigned_tasks.estimate_minutes, user_time.total_minutes
       ORDER BY completed_tasks DESC, total_minutes DESC
     `
@@ -329,6 +340,7 @@ export async function workspaceSummary(req: Request, res: Response) {
         FROM "Task" root
         JOIN "Task" related ON related.id = root.id OR related."parentTaskId" = root.id
         WHERE root."workspaceId" = ${workspaceId}
+          ${scopeSql("root")}
           AND root."parentTaskId" IS NULL
           AND root."deletedAt" IS NULL
           AND related."deletedAt" IS NULL
@@ -382,6 +394,7 @@ export async function workspaceSummary(req: Request, res: Response) {
       LEFT JOIN "Comment" c ON c."taskId" = t.id
       LEFT JOIN "Task" st ON st."parentTaskId" = t.id
       WHERE t."workspaceId" = ${workspaceId}
+          ${scopeSql("t")}
         AND t."parentTaskId" IS NULL
         AND t."deletedAt" IS NULL
         AND p."deletedAt" IS NULL

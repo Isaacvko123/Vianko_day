@@ -28,5 +28,8 @@ export const createBoardStatusSchema = z.object({
     category: z.enum(["TODO", "IN_PROGRESS", "BLOCKED", "REVIEW", "DONE", "CANCELLED"]).default("TODO"),
     countsAsDone: z.boolean().default(false),
     isDefault: z.boolean().default(false)
+  }).superRefine((body, context) => {
+    if (body.countsAsDone !== (body.category === "DONE")) context.addIssue({ code: z.ZodIssueCode.custom, message: "Solo la categoría Terminado puede contar como completada." });
+    if (body.isDefault && body.category !== "TODO") context.addIssue({ code: z.ZodIssueCode.custom, message: "El estado inicial debe pertenecer a Por hacer." });
   })
 });

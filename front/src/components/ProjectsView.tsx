@@ -1,11 +1,14 @@
-import { FormEvent, useState } from "react";
-import { Archive, CalendarDays, CirclePlus, Edit3, FolderKanban, Lock, RefreshCw, TimerReset, Users, X } from "lucide-react";
-import { Badge, Button, EmptyState, LoadingState, PageHeader, StatCard } from "./ui";
-import type { Area, Locality, Project } from "../types";
-import { formatDate, getDueSummary } from "../lib/format";
-
+import { useState, type FormEvent } from 'react';
+import { Archive, ArrowUpRight, Building2, CalendarDays, FolderKanban, Lock, MoreHorizontal, Plus, Search, UsersRound, ArrowRight } from 'lucide-react';
+import type { Area, Locality, Project } from '../types';
+import { formatDate, initials } from '../lib/format';
+import { Button, EmptyState, LoadingState } from './ui';
+import { Dialog } from './ui/Dialog';
 type ProjectsViewProps = {
   projects: Project[];
+  onCompose?: (projectId: string) => void;
+  currentAreaId?: string;
+  currentLocalityId?: string;
   areas: Area[];
   localities: Locality[];
   activeProjectId?: string;
@@ -26,403 +29,66 @@ type ProjectsViewProps = {
   }) => Promise<void>;
   onUpdateProject: (projectId: string, input: {
     areaId?: string;
-    localityId?: string;
+    localityId?: string | null;
+    expectedUpdatedAt?: string;
     name?: string;
     description?: string;
     visibility?: "WORKSPACE" | "PRIVATE";
     color?: string;
-    startDate?: string;
-    endDate?: string;
+    startDate?: string | null;
+    endDate?: string | null;
   }) => Promise<void>;
   onArchiveProject: (projectId: string) => Promise<void>;
 };
 
-function readFormString(form: HTMLFormElement, fieldName: string) {
-  const value = new FormData(form).get(fieldName);
-  return typeof value === "string" ? value.trim() : "";
-}
 
-function toIsoDate(dateValue: string) {
-  return dateValue ? new Date(`${dateValue}T00:00:00.000Z`).toISOString() : undefined;
-}
-
-function toDateInput(value?: string) {
-  return value ? new Date(value).toISOString().slice(0, 10) : "";
-}
-
-export function ProjectsView({
-  projects,
-  areas,
-  localities,
-  activeProjectId,
-  isLoading,
-  canCreateProjects,
-  canDeleteProjects,
-  onRefresh,
-  onSelectProject,
-  onCreateProject,
-  onUpdateProject,
-  onArchiveProject
-}: ProjectsViewProps) {
-  const [isCreating, setIsCreating] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [isArchiving, setIsArchiving] = useState(false);
-  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
-  const [projectToEdit, setProjectToEdit] = useState<Project>();
-  const [selectedAreaId, setSelectedAreaId] = useState("");
-  const [editAreaId, setEditAreaId] = useState("");
-  const [errorMessage, setErrorMessage] = useState("");
-  const projectLocalities = selectedAreaId
-    ? localities.filter((locality) => locality.areaId === selectedAreaId)
-    : localities;
-  const editProjectLocalities = editAreaId
-    ? localities.filter((locality) => locality.areaId === editAreaId)
-    : localities;
-  const privateProjects = projects.filter((project) => project.visibility === "PRIVATE").length;
-  const workspaceProjects = projects.length - privateProjects;
-  const projectsWithDates = projects.filter((project) => project.startDate || project.endDate).length;
-  const overdueProjects = projects.filter((project) => getDueSummary(project.endDate, false).tone === "overdue").length;
-
-  async function handleCreateProject(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-    setIsCreating(true);
-
+const palette = ['#255ac4', '#334155', '#5278a5', '#76689b', '#3f7c80', '#a07840'];
+export function ProjectsView({ projects, areas, localities, currentAreaId, currentLocalityId, isLoading, canCreateProjects, onSelectProject, onCreateProject, onUpdateProject, onArchiveProject, onCompose }: ProjectsViewProps) {
+  const [search, setSearch] = useState('');
+  const [areaFilter, setAreaFilter] = useState('');
+  const [modal, setModal] = useState<'create' | 'edit' | 'archive'>();
+  const [editing, setEditing] = useState<Project>();
+  const [areaId, setAreaId] = useState('');
+  const [localityId, setLocalityId] = useState('');
+  const [visibility, setVisibility] = useState<'PRIVATE' | 'WORKSPACE'>('PRIVATE');
+  const [color, setColor] = useState(palette[0]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  function open(project?: Project) {
+    setEditing(project); setAreaId(project?.areaId ?? currentAreaId ?? areas[0]?.id ?? ''); setLocalityId(project?.localityId ?? currentLocalityId ?? '');
+    setVisibility(project?.visibility ?? 'PRIVATE'); setColor(project?.color ?? palette[0]); setError(''); setModal(project ? 'edit' : 'create');
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError('');
+    const form = new FormData(event.currentTarget);
+    const read = (key: string) => String(form.get(key) ?? '').trim();
     try {
-      const form = event.currentTarget;
-      const description = readFormString(form, "description");
-      const startDate = readFormString(form, "startDate");
-      const endDate = readFormString(form, "endDate");
-
-      if (startDate && endDate && endDate < startDate) {
-        throw new Error("La fecha fin no puede ser anterior a la fecha inicio.");
+      if (modal === 'archive' && editing) await onArchiveProject(editing.id);
+      else {
+        const startDate = read('startDate'); const endDate = read('endDate');
+        if (startDate && endDate && startDate > endDate) throw new Error('La entrega debe ser posterior al inicio.');
+        const input = { name: read('name'), description: read('description'), areaId, visibility, color };
+        if (editing) await onUpdateProject(editing.id, { ...input, localityId: localityId || null, startDate: startDate ? `${startDate}T00:00:00.000Z` : null, endDate: endDate ? `${endDate}T00:00:00.000Z` : null, expectedUpdatedAt: editing.updatedAt });
+        else await onCreateProject({ ...input, localityId: localityId || undefined, startDate: startDate ? `${startDate}T00:00:00.000Z` : undefined, endDate: endDate ? `${endDate}T00:00:00.000Z` : undefined });
       }
-
-      await onCreateProject({
-        areaId: selectedAreaId || undefined,
-        localityId: readFormString(form, "localityId") || undefined,
-        name: readFormString(form, "name"),
-        description: description || undefined,
-        visibility: readFormString(form, "visibility") === "PRIVATE" ? "PRIVATE" : "WORKSPACE",
-        color: readFormString(form, "color") || undefined,
-        startDate: toIsoDate(startDate),
-        endDate: toIsoDate(endDate)
-      });
-
-      form.reset();
-      setSelectedAreaId("");
-      setIsProjectModalOpen(false);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo crear el proyecto.");
-    } finally {
-      setIsCreating(false);
-    }
+      setModal(undefined);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'No se pudo guardar el proyecto.'); }
+    finally { setBusy(false); }
   }
-
-  async function handleUpdateProject(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setErrorMessage("");
-
-    if (!projectToEdit) {
-      setErrorMessage("Selecciona un proyecto para editar.");
-      return;
-    }
-
-    setIsUpdating(true);
-
-    try {
-      const form = event.currentTarget;
-      const description = readFormString(form, "description");
-      const startDate = readFormString(form, "startDate");
-      const endDate = readFormString(form, "endDate");
-
-      if (startDate && endDate && endDate < startDate) {
-        throw new Error("La fecha fin no puede ser anterior a la fecha inicio.");
-      }
-
-      await onUpdateProject(projectToEdit.id, {
-        areaId: editAreaId || undefined,
-        localityId: readFormString(form, "localityId") || undefined,
-        name: readFormString(form, "name"),
-        description: description || undefined,
-        visibility: readFormString(form, "visibility") === "PRIVATE" ? "PRIVATE" : "WORKSPACE",
-        color: readFormString(form, "color") || undefined,
-        startDate: toIsoDate(startDate),
-        endDate: toIsoDate(endDate)
-      });
-
-      setProjectToEdit(undefined);
-      setEditAreaId("");
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo actualizar el proyecto.");
-    } finally {
-      setIsUpdating(false);
-    }
-  }
-
-  async function handleArchiveProject() {
-    setErrorMessage("");
-
-    if (!projectToEdit) {
-      setErrorMessage("Selecciona un proyecto para archivar.");
-      return;
-    }
-
-    const shouldArchive = window.confirm(`Archivar "${projectToEdit.name}" lo quitara de la operacion activa, tableros y reportes vigentes. El historial queda guardado para auditoria. ¿Continuar?`);
-
-    if (!shouldArchive) {
-      return;
-    }
-
-    setIsArchiving(true);
-
-    try {
-      await onArchiveProject(projectToEdit.id);
-      setProjectToEdit(undefined);
-      setEditAreaId("");
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "No se pudo archivar el proyecto.");
-    } finally {
-      setIsArchiving(false);
-    }
-  }
-
-  return (
-    <section className="page projects-page">
-      <PageHeader
-        eyebrow="Proyectos"
-        title="Trabajo organizado por alcance"
-        description="Cada proyecto define area, localidad, fechas, privacidad y el equipo que puede trabajar dentro."
-        actions={(
-          <>
-            <Button icon={<RefreshCw size={17} />} variant="secondary" onClick={onRefresh}>Actualizar</Button>
-            {canCreateProjects ? (
-              <Button icon={<CirclePlus size={18} />} variant="primary" data-guide="projects-new" onClick={() => {
-                setErrorMessage("");
-                setIsProjectModalOpen(true);
-              }}>
-                Nuevo proyecto
-              </Button>
-            ) : undefined}
-          </>
-        )}
-      />
-
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" data-guide="projects-stats">
-        <StatCard icon={<FolderKanban size={18} />} label="Total" value={projects.length} />
-        <StatCard icon={<Lock size={18} />} label="Privados" value={privateProjects} tone="slate" />
-        <StatCard icon={<Users size={18} />} label="Area" value={workspaceProjects} tone="green" />
-        <StatCard icon={<TimerReset size={18} />} label="Vencidos" value={overdueProjects} tone={overdueProjects > 0 ? "red" : "slate"} />
-        <StatCard icon={<CalendarDays size={18} />} label="Con fechas" value={projectsWithDates} tone="blue" />
-      </section>
-
-      <section className="project-list project-grid">
-          {isLoading ? <LoadingState className="col-span-full" label="Cargando proyectos..." rows={4} /> : undefined}
-          {projects.map((project) => (
-            <article
-              key={project.id}
-              className={activeProjectId === project.id ? "project-card active" : "project-card"}
-              data-guide="projects-card"
-            >
-              <button className="project-card-main" type="button" onClick={() => onSelectProject(project.id)}>
-                <span className="project-color" style={{ background: project.color ?? "#2563eb" }} />
-                <span>
-                  <span className="project-card-header">
-                    <strong>{project.name}</strong>
-                    <Badge tone={project.visibility === "PRIVATE" ? "slate" : "blue"}>{project.visibility === "PRIVATE" ? "Privado" : "Workspace"}</Badge>
-                  </span>
-                  <small>{project.description || "Sin descripcion"}</small>
-                  <span className="project-dates">
-                    <CalendarDays size={14} />
-                    Inicio {formatDate(project.startDate)} · Fin {formatDate(project.endDate)}
-                  </span>
-                  <span className="meta-row">
-                    {project.visibility === "PRIVATE" ? <Lock size={14} /> : <Users size={14} />}
-                    {project.visibility === "PRIVATE" ? "Privado" : "Workspace"}
-                    {project.area ? <span>{project.area.name}</span> : undefined}
-                    {project.locality ? <span>{project.locality.name}</span> : undefined}
-                    <span>Creado {formatDate(project.createdAt)}</span>
-                  </span>
-                </span>
-              </button>
-              {canCreateProjects ? (
-                <button className="project-edit-button" type="button" onClick={() => {
-                  setErrorMessage("");
-                  setProjectToEdit(project);
-                  setEditAreaId(project.areaId ?? "");
-                }}>
-                  <Edit3 size={15} />
-                  Editar
-                </button>
-              ) : undefined}
-            </article>
-          ))}
-          {!isLoading && projects.length === 0 ? (
-            <EmptyState
-              className="col-span-full"
-              icon={<FolderKanban size={24} />}
-              title="Aun no hay proyectos"
-              description="Crea el primer proyecto para activar tablero, asignados y seguimiento."
-              action={canCreateProjects ? <Button icon={<CirclePlus size={18} />} variant="primary" onClick={() => setIsProjectModalOpen(true)}>Crear proyecto</Button> : undefined}
-            />
-          ) : undefined}
-      </section>
-
-      {isProjectModalOpen ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="create-project-title">
-          <section className="task-modal admin-modal">
-            <header className="modal-header">
-              <div>
-                <p className="eyebrow">Proyecto</p>
-                <h2 id="create-project-title">Crear proyecto</h2>
-              </div>
-              <button className="icon-button" type="button" onClick={() => setIsProjectModalOpen(false)} title="Cerrar">
-                <X size={18} />
-              </button>
-            </header>
-
-            <form className="form-stack admin-modal-form" onSubmit={handleCreateProject}>
-              <label>
-                Nombre
-                <input name="name" minLength={2} required placeholder="Implementacion cliente A" />
-              </label>
-              <label>
-                Visibilidad
-                <select name="visibility" defaultValue="PRIVATE">
-                  <option value="PRIVATE">Privado</option>
-                  <option value="WORKSPACE">Visible para gerencia del area</option>
-                </select>
-              </label>
-              <label className="wide-field">
-                Descripcion
-                <textarea name="description" rows={4} placeholder="Objetivo, alcance o notas del proyecto" />
-              </label>
-              <label>
-                Area
-                <select name="areaId" value={selectedAreaId} onChange={(event) => setSelectedAreaId(event.currentTarget.value)}>
-                  <option value="">Mi area</option>
-                  {areas.map((area) => (
-                    <option key={area.id} value={area.id}>{area.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Localidad
-                <select name="localityId" key={selectedAreaId} defaultValue="">
-                  <option value="">Mi localidad</option>
-                  {projectLocalities.map((locality) => (
-                    <option key={locality.id} value={locality.id}>{locality.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Fecha inicio
-                <input name="startDate" type="date" />
-              </label>
-              <label>
-                Fecha fin
-                <input name="endDate" type="date" />
-              </label>
-              <label>
-                Color
-                <input name="color" type="color" defaultValue="#2563eb" />
-              </label>
-              {errorMessage ? <p className="form-error wide-field">{errorMessage}</p> : undefined}
-              <div className="modal-actions">
-                <button className="ghost-button" type="button" onClick={() => setIsProjectModalOpen(false)}>Cancelar</button>
-                <button className="primary-action" type="submit" disabled={isCreating}>
-                  <CirclePlus size={18} />
-                  {isCreating ? "Creando..." : "Crear proyecto"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      ) : undefined}
-
-      {projectToEdit ? (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="edit-project-title">
-          <section className="task-modal admin-modal">
-            <header className="modal-header">
-              <div>
-                <p className="eyebrow">Proyecto</p>
-                <h2 id="edit-project-title">Editar proyecto</h2>
-              </div>
-              <button className="icon-button" type="button" onClick={() => setProjectToEdit(undefined)} title="Cerrar">
-                <X size={18} />
-              </button>
-            </header>
-
-            <form className="form-stack admin-modal-form" onSubmit={handleUpdateProject}>
-              <label>
-                Nombre
-                <input name="name" minLength={2} required defaultValue={projectToEdit.name} />
-              </label>
-              <label>
-                Visibilidad
-                <select name="visibility" defaultValue={projectToEdit.visibility}>
-                  <option value="PRIVATE">Privado</option>
-                  <option value="WORKSPACE">Visible para gerencia del area</option>
-                </select>
-              </label>
-              <label className="wide-field">
-                Descripcion
-                <textarea name="description" rows={4} defaultValue={projectToEdit.description ?? ""} />
-              </label>
-              <label>
-                Area
-                <select name="areaId" value={editAreaId} onChange={(event) => setEditAreaId(event.currentTarget.value)}>
-                  <option value="">Mi area</option>
-                  {areas.map((area) => (
-                    <option key={area.id} value={area.id}>{area.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Localidad
-                <select name="localityId" key={editAreaId} defaultValue={projectToEdit.localityId ?? ""}>
-                  <option value="">Mi localidad</option>
-                  {editProjectLocalities.map((locality) => (
-                    <option key={locality.id} value={locality.id}>{locality.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Fecha inicio
-                <input name="startDate" type="date" defaultValue={toDateInput(projectToEdit.startDate)} />
-              </label>
-              <label>
-                Fecha fin
-                <input name="endDate" type="date" defaultValue={toDateInput(projectToEdit.endDate)} />
-              </label>
-              <label>
-                Color
-                <input name="color" type="color" defaultValue={projectToEdit.color ?? "#2563eb"} />
-              </label>
-              {errorMessage ? <p className="form-error wide-field">{errorMessage}</p> : undefined}
-              {canDeleteProjects ? (
-                <section className="project-danger-zone wide-field">
-                  <span>
-                    <strong>Archivar proyecto</strong>
-                    <small>Quita el proyecto de la operacion activa sin borrar auditoria, actividades ni tiempos historicos.</small>
-                  </span>
-                  <button className="secondary-action danger-soft" type="button" disabled={isArchiving} onClick={() => void handleArchiveProject()}>
-                    <Archive size={18} />
-                    {isArchiving ? "Archivando..." : "Archivar"}
-                  </button>
-                </section>
-              ) : undefined}
-              <div className="modal-actions">
-                <button className="ghost-button" type="button" onClick={() => setProjectToEdit(undefined)}>Cancelar</button>
-                <button className="primary-action" type="submit" disabled={isUpdating}>
-                  <Edit3 size={18} />
-                  {isUpdating ? "Guardando..." : "Guardar cambios"}
-                </button>
-              </div>
-            </form>
-          </section>
-        </div>
-      ) : undefined}
-    </section>
-  );
+  const shown = projects.filter(project => (!areaFilter || project.areaId===areaFilter) && `${project.name} ${project.description ?? ''} ${project.area?.name ?? ''}`.toLocaleLowerCase('es').includes(search.trim().toLocaleLowerCase('es')));
+  return <section className="page product-page">
+    <header className="product-heading"><div><p className="eyebrow">El trabajo de tu equipo</p><h1>Proyectos</h1><p>Un espacio para cada objetivo. Abre un proyecto para crear y organizar sus tareas.</p></div>{canCreateProjects && <Button variant="primary" icon={<Plus size={17} />} data-guide="projects-new" onClick={() => open()}>Crear proyecto</Button>}</header>
+    <div className="day-projects-layout"><aside className="day-project-areas"><h2>Explorar</h2><button className={!areaFilter?'selected':''} onClick={()=>setAreaFilter('')}><FolderKanban size={16}/><span>Todos los proyectos</span><small>{projects.length}</small></button>{Array.from(new Map(projects.filter(project=>project.area).map(project=>[project.area!.id,project.area!])).values()).map(area=><button key={area.id} className={areaFilter===area.id?'selected':''} onClick={()=>setAreaFilter(area.id)}><Building2 size={16}/><span>{area.name}</span><small>{projects.filter(project=>project.areaId===area.id).length}</small></button>)}<p>Las tareas viven en un proyecto. Las personas reciben sus asignaciones en Mi trabajo.</p></aside><div className="day-projects-results"><div className="day-projects-search"><label className="day-search"><Search size={17}/><input aria-label="Buscar proyectos" placeholder="Buscar por nombre u objetivo…" value={search} onChange={event=>setSearch(event.target.value)}/></label><span>{shown.length} proyectos</span></div>
+    {isLoading&&!projects.length&&<LoadingState label="Cargando proyectos…" rows={3}/>}
+    <div className="day-project-cards">{shown.map(project=><article className="day-project-card" key={project.id}><header><span style={{background:project.color??'#255ac4'}}>{project.name.slice(0,1).toUpperCase()}</span><div><small>{project.area?.name??'Proyecto'}{project.locality&&` · ${project.locality.name}`}</small><button onClick={()=>onSelectProject(project.id)}>{project.name}</button></div>{project.permissions?.includes('project.update')&&<Button variant="ghost" size="sm" aria-label={`Configurar ${project.name}`} onClick={()=>open(project)}><MoreHorizontal size={18}/></Button>}</header><p>{project.description||'Un espacio para organizar tareas y trabajar en equipo.'}</p><div className="day-project-members"><div className="day-avatar-stack">{project.members?.slice(0,4).map(member=><span key={member.userId} title={member.user.name}>{initials(member.user.name)}</span>)}</div><small>{project.members?.length??0} {(project.members?.length??0)===1?'persona':'personas'}</small><span title={project.visibility==='PRIVATE'?'Solo participantes':'Compartido con su área'}>{project.visibility==='PRIVATE'?<Lock size={13}/>:<Building2 size={13}/>}</span></div>{project.endDate&&<div className="day-project-deadline"><CalendarDays size={14}/>Entrega {formatDate(project.endDate)}</div>}<footer>{onCompose&&project.permissions?.includes('task.create')&&<button onClick={()=>onCompose(project.id)}><Plus size={15}/>Crear tarea</button>}<button onClick={()=>onSelectProject(project.id)}>Abrir proyecto<ArrowRight size={15}/></button></footer></article>)}</div></div></div>
+    {!isLoading && !shown.length && <EmptyState icon={<FolderKanban size={25} />} title={search ? 'No encontramos ese proyecto' : 'Tu próximo objetivo empieza aquí'} description={search ? 'Prueba con otro nombre o área.' : 'Crea un proyecto, incorpora a tu equipo y agrega su primera tarea.'} action={canCreateProjects && !search ? <Button variant="primary" onClick={() => open()}>Crear primer proyecto</Button> : undefined} />}
+    {modal && <Dialog title={modal === 'create' ? 'Crear proyecto' : modal === 'archive' ? 'Archivar proyecto' : 'Configurar proyecto'} description={modal === 'archive' ? 'Dejará de aparecer en el trabajo activo del equipo.' : 'Define el objetivo y quién puede acceder.'} onClose={() => setModal(undefined)} busy={busy}>
+      <form className="product-form" onSubmit={submit}>{modal === 'archive' ? <p>Se archivará «{editing?.name}» junto con sus tableros activos. Los registros se conservarán.</p> : <>
+        <label>Nombre del proyecto<input name="name" data-autofocus required minLength={2} maxLength={160} defaultValue={editing?.name} placeholder="Ej. Apertura de nueva sucursal" /></label><label>Objetivo <span className="optional-label">Opcional</span><textarea name="description" maxLength={2000} rows={2} defaultValue={editing?.description} placeholder="¿Qué necesita lograr el equipo?" /></label>
+        <div className="form-two-columns"><label>Área responsable<select required value={areaId} onChange={event => { setAreaId(event.target.value); setLocalityId(''); }}><option value="" disabled>Selecciona un área</option>{areas.map(area => <option key={area.id} value={area.id}>{area.name}</option>)}</select></label><label>Quién puede verlo<select value={visibility} onChange={event => setVisibility(event.target.value as 'PRIVATE' | 'WORKSPACE')}><option value="PRIVATE">Solo participantes</option><option value="WORKSPACE">Participantes y gerencia del área</option></select></label></div>
+        <p className="scope-note">{visibility === 'PRIVATE' ? 'Solo las personas incorporadas al proyecto y administración pueden acceder.' : 'Además del equipo del proyecto, puede acceder la gerencia de esta área dentro de sus localidades.'} Los externos siempre necesitan una invitación al proyecto.</p>
+        <details className="form-details"><summary>Fechas, localidad y color <span>Opcional</span></summary><div className="form-two-columns"><label>Inicio<input name="startDate" type="date" defaultValue={editing?.startDate?.slice(0, 10)} /></label><label>Entrega<input name="endDate" type="date" defaultValue={editing?.endDate?.slice(0, 10)} /></label></div><label>Localidad<select value={localityId} onChange={event => setLocalityId(event.target.value)}><option value="">Toda el área</option>{localities.filter(locality => locality.areaId === areaId).map(locality => <option key={locality.id} value={locality.id}>{locality.name}</option>)}</select></label><fieldset><legend>Color del proyecto</legend><div className="color-options">{palette.map(value => <label key={value} style={{ background: value }} title={value}><input aria-label={`Color ${value}`} type="radio" name="color" checked={color === value} onChange={() => setColor(value)} /></label>)}</div></fieldset></details>
+      </>}{error && <p className="form-error" role="alert">{error}</p>}<footer className="product-form-actions">{modal === 'edit' && editing?.permissions?.includes('project.delete') && <Button variant="ghost" icon={<Archive size={16} />} onClick={() => { setError(''); setModal('archive'); }}>Archivar</Button>}<Button disabled={busy} onClick={() => setModal(undefined)}>Cancelar</Button><Button type="submit" variant={modal === 'archive' ? 'danger' : 'primary'} disabled={busy}>{busy ? 'Guardando…' : modal === 'create' ? 'Crear proyecto' : modal === 'archive' ? 'Archivar proyecto' : 'Guardar cambios'}</Button></footer></form>
+    </Dialog>}
+  </section>;
 }

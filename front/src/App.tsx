@@ -1,16 +1,17 @@
+import { InvitationScreen } from "./components/InvitationScreen";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AuthenticatedApp } from "./components/AuthenticatedApp";
 import { AuthScreen } from "./components/AuthScreen";
 import { WorkspaceSelect } from "./components/WorkspaceSelect";
 import { useAppController } from "./hooks/useAppController";
 
-const appRoutes = ["/projects", "/board", "/completed", "/management", "/members", "/reports"];
+const appRoutes = ["/work", "/roles", "/organization", "/notifications", "/projects", "/board", "/completed", "/management", "/members", "/reports"];
 
 export function App() {
   const controller = useAppController();
 
   const homePath = controller.session
-    ? controller.selectedWorkspace ? "/projects" : "/workspaces"
+    ? controller.selectedWorkspace ? "/work" : "/workspaces"
     : "/login";
 
   function workspaceSelectRoute() {
@@ -32,6 +33,8 @@ export function App() {
   }
 
   function canAccessPath(path: string) {
+    if (path === "/roles") return controller.permissions.canManageRoles;
+    if (path === "/organization") return controller.permissions.canManageOrganization;
     if (path === "/management") {
       return controller.permissions.canViewManagement;
     }
@@ -65,6 +68,7 @@ export function App() {
 
   return (
     <Routes>
+      <Route path="/join" element={<InvitationScreen onAuthenticated={controller.actions.handleAuthenticated} />} />
       <Route path="/" element={<Navigate to={homePath} replace />} />
       <Route
         path="/login"

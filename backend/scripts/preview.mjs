@@ -1,0 +1,23 @@
+// Serve the production frontend and the API on one local origin, without bootstrapping existing accounts.
+import 'dotenv/config';
+import http from 'node:http';
+import express from 'express';
+import { fileURLToPath } from 'node:url';
+const port = Number(process.env.PREVIEW_PORT ?? 4173);
+process.env.CORS_ORIGINS = [process.env.CORS_ORIGINS, `http://127.0.0.1:${port}`, `http://localhost:${port}`].filter(Boolean).join(',');
+const { createApp } = await import('../dist/src/app.js');
+const { initializeRealtime } = await import('../dist/src/services/realtime.service.js');
+const { startChatExpiry } = await import('../dist/src/services/project-chat.service.js');
+const { startPushDelivery } = await import('../dist/src/services/push-delivery.service.js');
+const { prisma } = await import('../dist/src/db/prisma.js');
+await prisma.$connect();
+const app = express();
+const api = createApp();
+app.disable('x-powered-by');
+app.use((req,res,next) => req.path.startsWith('/api/') || req.path === '/health' ? api(req,res,next) : next());
+const directory = fileURLToPath(new URL('../../front/dist/', import.meta.url));
+app.use(express.static(directory, { etag: true, setHeaders(res,path) { if (path.endsWith('sw.js') || path.endsWith('index.html')) res.setHeader('Cache-Control','no-cache'); } }));
+app.get('/{*path}', (_req,res) => res.sendFile(`${directory}/index.html`, {headers:{'Cache-Control':'no-cache'}}));
+const server = http.createServer(app); initializeRealtime(server); const stopPush = startPushDelivery(); const stopChatExpiry = startChatExpiry();
+server.listen(port,'127.0.0.1', () => console.log(`Vianko Day: http://127.0.0.1:${port}`));
+for (const signal of ['SIGINT','SIGTERM']) process.on(signal, () => { stopPush(); stopChatExpiry(); server.closeAllConnections(); server.close(async () => { await prisma.$disconnect(); process.exit(0); }); setTimeout(()=>process.exit(0),3000).unref(); });

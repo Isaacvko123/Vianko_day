@@ -1,3 +1,4 @@
+import { assertRoleGrant, assertWorkspaceMember, getRolePermissions } from "../services/access-control.service.js";
 import { prisma } from "../db/prisma.js";
 import { activeRecordFilter } from "../db/filters.js";
 import type { Prisma, User } from "@prisma/client";
@@ -5,7 +6,6 @@ import { AppError } from "../utils/app-error.js";
 import { generateOpaqueToken, hashPassword, hashToken, verifyPassword } from "../utils/crypto.js";
 import { createSession, revokeSession, rotateSession } from "../services/auth.service.js";
 import type { Request, Response } from "express";
-import { getQueryString } from "../utils/request.js";
 
 function toPublicUser(user: Pick<User, "id" | "name" | "email" | "avatarUrl">) {
   const publicUser = {
@@ -105,10 +105,27 @@ export async function acceptInvitation(req: Request, res: Response) {
     throw new AppError(400, "INVITATION_INVALID", "Invitation is invalid or expired.");
   }
 
+  if (!invitation.invitedById) throw new AppError(403, "INVITATION_REISSUE_REQUIRED", "Solicita una invitación nueva a administración.");
+  const inviter = await assertWorkspaceMember(invitation.invitedById, invitation.workspaceId);
+  const inviterPermissions = await getRolePermissions(inviter.roleId ?? undefined, invitation.workspaceId);
+  if (inviter.userType !== "INTERNAL" || !inviterPermissions.includes("workspace.invite_users")) throw new AppError(403, "INVITATION_REVOKED", "La persona que invitó ya no puede autorizar accesos.");
+  if (!inviterPermissions.includes("workspace.manage") && inviter.areaId !== invitation.areaId) throw new AppError(403, "INVITATION_SCOPE_CHANGED", "Solicita una invitación nueva al responsable de tu área.");
+  if (!invitation.roleId) throw new AppError(400, "INVITATION_ROLE_REQUIRED", "Solicita una invitación con un rol definido.");
+  await assertRoleGrant(invitation.invitedById, invitation.workspaceId, invitation.roleId, invitation.userType);
+
   const acceptedUser = await prisma.$transaction(async (tx) => {
     let invitedUser = await tx.user.findUnique({
       where: { email: invitation.email }
     });
+
+    if (invitedUser && (!invitedUser.isActive || (invitedUser.passwordHash && (!password || !await verifyPassword(invitedUser.passwordHash, password))))) {
+      throw new AppError(401, "INVALID_CREDENTIALS", "Introduce la contraseña de tu cuenta existente para aceptar la invitación.");
+    }
+    if (invitedUser) {
+      const membership = await tx.workspaceMember.findUnique({ where: { workspaceId_userId: { workspaceId: invitation.workspaceId, userId: invitedUser.id } } });
+      if (membership && membership.status !== "PENDING_APPROVAL" && membership.status !== "INVITED") throw new AppError(409, "MEMBER_ALREADY_EXISTS", "Tu acceso ya está definido. Administración debe modificarlo desde Personas.");
+    }
+    if (invitedUser && !invitedUser.passwordHash && !password) throw new AppError(400, "PASSWORD_REQUIRED", "Define una contraseña para tu cuenta.");
 
     if (!invitedUser) {
       if (!name || !password) {
@@ -187,7 +204,7 @@ export async function acceptInvitation(req: Request, res: Response) {
     }
 
     await tx.invitation.update({
-      where: { id: invitation.id },
+      where: { id: invitation.id, status: "PENDING" },
       data: {
         status: "ACCEPTED",
         acceptedAt: new Date()
@@ -228,221 +245,3 @@ export async function createInvitationToken() {
   };
 }
 
-export async function listRegistrationWorkspaces(_req: Request, res: Response) {
-  const workspaces = await prisma.workspace.findMany({
-    where: {
-      isActive: true,
-      ...activeRecordFilter
-    },
-    select: {
-      id: true,
-      name: true,
-      slug: true
-    },
-    orderBy: {
-      name: "asc"
-    },
-    take: 100
-  });
-
-  res.json({ workspaces });
-}
-
-export async function getRegistrationOptions(req: Request, res: Response) {
-  const workspaceSlug = getQueryString(req, "workspaceSlug");
-  const workspace = await prisma.workspace.findFirst({
-    where: {
-      slug: workspaceSlug,
-      isActive: true,
-      ...activeRecordFilter
-    },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      areas: {
-        orderBy: [{ isDefault: "desc" }, { name: "asc" }]
-      },
-      positions: {
-        include: {
-          area: true
-        },
-        orderBy: [{ isManager: "desc" }, { name: "asc" }]
-      },
-      localities: {
-        include: {
-          area: true
-        },
-        orderBy: [{ isDefault: "desc" }, { name: "asc" }]
-      }
-    }
-  });
-
-  if (!workspace) {
-    throw new AppError(404, "WORKSPACE_NOT_FOUND", "Workspace was not found.");
-  }
-
-  res.json({
-    workspace: {
-      id: workspace.id,
-      name: workspace.name,
-      slug: workspace.slug
-    },
-    areas: workspace.areas,
-    localities: workspace.localities,
-    positions: workspace.positions
-  });
-}
-
-export async function requestAccess(req: Request, res: Response) {
-  const { workspaceSlug, name, email, password, areaId, localityId, positionId, userType } = req.body;
-  const workspace = await prisma.workspace.findFirst({
-    where: {
-      slug: workspaceSlug,
-      isActive: true,
-      ...activeRecordFilter
-    }
-  });
-
-  if (!workspace) {
-    throw new AppError(404, "WORKSPACE_NOT_FOUND", "Workspace was not found.");
-  }
-
-  const area = await prisma.area.findFirst({
-    where: {
-      id: areaId,
-      workspaceId: workspace.id
-    }
-  });
-
-  if (!area) {
-    throw new AppError(400, "AREA_INVALID", "Area does not belong to this workspace.");
-  }
-
-  const locality = await prisma.locality.findFirst({
-    where: {
-      id: localityId,
-      workspaceId: workspace.id
-    }
-  });
-
-  if (!locality) {
-    throw new AppError(400, "LOCALITY_INVALID", "Locality does not belong to this workspace.");
-  }
-
-  if (locality.areaId && locality.areaId !== area.id) {
-    throw new AppError(400, "LOCALITY_AREA_INVALID", "Locality does not belong to the selected area.");
-  }
-
-  const position = await prisma.position.findFirst({
-    where: {
-      id: positionId,
-      workspaceId: workspace.id
-    }
-  });
-
-  if (!position) {
-    throw new AppError(400, "POSITION_INVALID", "Position does not belong to this workspace.");
-  }
-
-  if (position.areaId && position.areaId !== area.id) {
-    throw new AppError(400, "POSITION_AREA_INVALID", "Position does not belong to the selected area.");
-  }
-
-  const member = await prisma.$transaction(async (tx) => {
-    const existingUser = await tx.user.findUnique({
-      where: { email }
-    });
-
-    const user = existingUser
-      ? await tx.user.update({
-        where: { id: existingUser.id },
-        data: existingUser.passwordHash
-          ? { name }
-          : {
-            name,
-            passwordHash: await hashPassword(password)
-          }
-      })
-      : await tx.user.create({
-        data: {
-          name,
-          email,
-          passwordHash: await hashPassword(password)
-        }
-      });
-
-    const existingMember = await tx.workspaceMember.findUnique({
-      where: {
-        workspaceId_userId: {
-          workspaceId: workspace.id,
-          userId: user.id
-        }
-      }
-    });
-
-    if (existingMember?.status === "ACTIVE") {
-      throw new AppError(409, "MEMBER_ALREADY_ACTIVE", "This user already belongs to the workspace.");
-    }
-
-    if (existingMember?.status === "SUSPENDED" || existingMember?.status === "REMOVED") {
-      throw new AppError(409, "MEMBER_BLOCKED", "This user cannot request access from the public form.");
-    }
-
-    const requestedMember = await tx.workspaceMember.upsert({
-      where: {
-        workspaceId_userId: {
-          workspaceId: workspace.id,
-          userId: user.id
-        }
-      },
-      update: {
-        areaId: area.id,
-        localityId: locality.id,
-        positionId: position.id,
-        userType,
-        status: "PENDING_APPROVAL"
-      },
-      create: {
-        workspaceId: workspace.id,
-        userId: user.id,
-        areaId: area.id,
-        localityId: locality.id,
-        positionId: position.id,
-        userType,
-        status: "PENDING_APPROVAL"
-      }
-    });
-
-    await syncMemberLocalityScopes(tx, requestedMember.id, [locality.id]);
-
-    await tx.activityLog.create({
-      data: {
-        workspaceId: workspace.id,
-        actorId: user.id,
-        entityType: "USER",
-        entityId: user.id,
-        action: "user.registration_requested",
-        after: {
-          userId: user.id,
-          areaId: area.id,
-          localityId: locality.id,
-          positionId: position.id,
-          userType
-        }
-      }
-    });
-
-    return requestedMember;
-  });
-
-  res.status(202).json({
-    status: member.status,
-    memberId: member.id,
-    workspace: {
-      id: workspace.id,
-      name: workspace.name,
-      slug: workspace.slug
-    }
-  });
-}

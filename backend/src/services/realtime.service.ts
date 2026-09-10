@@ -1,10 +1,12 @@
+import { chatProjectAccess } from './project-chat.service.js';
 import type http from "node:http";
 import crypto from "node:crypto";
 import { Server, type Socket } from "socket.io";
 import { z } from "zod";
 import { env } from "../config/env.js";
 import { prisma } from "../db/prisma.js";
-import { assertProjectAccess, assertTaskPermission, assertWorkspaceMember } from "./access-control.service.js";
+import { permissionContext } from "./permission-context.js";
+import { assertProjectAccess, assertTaskPermission, assertWorkspaceMember, getRolePermissions, getWorkspaceMemberLocalityIds } from "./access-control.service.js";
 import { verifyAccessToken } from "../utils/crypto.js";
 
 const uuidPayload = z.string().uuid();
@@ -15,6 +17,9 @@ const realtimeJoinWindowMs = 10_000;
 const realtimeJoinLimit = 60;
 
 export type RealtimeEventType =
+  | "chat.started" | "chat.message" | "chat.updated" | "chat.closed" | "task.deleted"
+  | "workspace.role_saved"
+  | "notification.read"
   | "socket.join_denied"
   | "workspace.created"
   | "workspace.user_invited"
@@ -64,7 +69,10 @@ export type RealtimeEvent = {
   workspaceId: string;
   projectId?: string;
   boardId?: string;
+  requestId?: string;
   taskId?: string;
+  commentId?: string;
+  chatId?: string;
   actorId?: string;
   title: string;
   message: string;
@@ -83,6 +91,7 @@ type ServerToClientEvents = {
 };
 
 type SocketData = {
+  expiresAt: number;
   userId: string;
   joinedWorkspaceId?: string;
   joinedProjectId?: string;
@@ -101,6 +110,7 @@ export type RealtimeEventInput = Omit<RealtimeEvent, "id" | "createdAt"> & {
 };
 
 const workspaceScopedEvents = new Set<RealtimeEventType>([
+  "workspace.role_saved",
   "workspace.created",
   "workspace.user_invited",
   "workspace.area_saved",
@@ -178,6 +188,8 @@ function getDefaultVisibility(event: RealtimeEventInput): RealtimeVisibility {
 function getEventRooms(event: RealtimeEventInput) {
   const visibility = event.visibility ?? getDefaultVisibility(event);
   const rooms = new Set<string>();
+  // Reach the inbox even while another project is open; each recipient is authorized below.
+  if (visibility !== "recipients") rooms.add(workspaceRoom(event.workspaceId));
 
   for (const recipientUserId of event.recipientUserIds ?? []) {
     rooms.add(userRoom(recipientUserId));
@@ -329,6 +341,7 @@ export function initializeRealtime(server: http.Server) {
         return;
       }
 
+      socket.data.expiresAt = ((payload as { exp?: number }).exp ?? 0) * 1000;
       socket.data.userId = user.id;
       next();
     } catch {
@@ -337,6 +350,9 @@ export function initializeRealtime(server: http.Server) {
   });
 
   realtimeServer.on("connection", (socket) => {
+    const expiryTimer = setTimeout(() => socket.disconnect(true), Math.max(0, socket.data.expiresAt - Date.now()));
+    expiryTimer.unref();
+    socket.on("disconnect", () => clearTimeout(expiryTimer));
     socket.join(userRoom(socket.data.userId));
 
     socket.on("workspace:join", (payload, ack) => {
@@ -447,5 +463,39 @@ export function emitRealtimeEvent(event: RealtimeEventInput) {
     return;
   }
 
-  realtimeServer.to(targetRooms).emit("realtime:event", toRealtimeEvent(clientEvent));
+  const server = realtimeServer;
+  const payload = toRealtimeEvent(clientEvent);
+  const checks = new Map<string, Promise<boolean>>();
+  for (const socket of server.sockets.sockets.values()) {
+    if (!targetRooms.some((room) => socket.rooms.has(room))) continue;
+    const userId = socket.data.userId;
+    let check = checks.get(userId);
+    if (!check) {
+      check = permissionContext.run(new Map(), async () => {
+        try {
+          if (event.type.startsWith('chat.')) {
+            if(!event.projectId) return false;
+            await chatProjectAccess(userId,event.projectId);
+            if(event.type !== 'chat.closed') return Boolean(await prisma.projectChat.findFirst({where:{id:event.chatId,projectId:event.projectId,expiresAt:{gt:new Date()}}}));
+            return true;
+          }
+          else if (event.type.startsWith("staffing.") && event.recipientUserIds?.includes(userId)) {
+            const member = await assertWorkspaceMember(userId, event.workspaceId);
+            if (member.userType !== "INTERNAL" || !event.requestId) return false;
+            const request = await prisma.projectStaffingRequest.findUnique({ where: { id: event.requestId }, include: { assignments: { where: { userId } } } });
+            if (!request) return false;
+            const permissions = await getRolePermissions(member.roleId ?? undefined, event.workspaceId);
+            const localities = await getWorkspaceMemberLocalityIds(member);
+            return request.requesterId === userId || request.assignments.length > 0 || permissions.includes("workspace.manage") || (permissions.includes("staffing.respond") && request.targetAreaId === member.areaId && (!request.targetLocalityId || !localities.length || localities.includes(request.targetLocalityId)));
+          }
+          else if (event.taskId) await assertTaskPermission(userId, event.taskId, "task.view_all");
+          else if (event.projectId && event.type !== "project.archived") await assertProjectAccess(userId, event.projectId);
+          else await assertWorkspaceMember(userId, event.workspaceId);
+          return true;
+        } catch { return false; }
+      });
+      checks.set(userId, check);
+    }
+    void check.then((allowed) => { if (allowed && socket.connected) socket.emit("realtime:event", payload); });
+  }
 }

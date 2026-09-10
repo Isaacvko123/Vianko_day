@@ -1,9 +1,11 @@
+import { ROLE_DEFINITIONS } from "../models/permissions.js";
 import type { Prisma } from "@prisma/client";
 import type { Request, Response } from "express";
 import { prisma } from "../db/prisma.js";
 import { activeRecordFilter } from "../db/filters.js";
 import { AppError } from "../utils/app-error.js";
-import { assertWorkspaceMember, assertWorkspacePermission, roleHasPermission } from "../services/access-control.service.js";
+import { canGrantRole, effectivePermissions } from "../models/business-policy.js";
+import { assertRoleGrant, getRolePermissions, assertWorkspaceMember, assertWorkspacePermission, roleHasPermission } from "../services/access-control.service.js";
 import { emitRealtimeEvent } from "../services/realtime.service.js";
 import { bootstrapWorkspaceForOwner } from "../services/workspace.service.js";
 import { createInvitationToken } from "./auth.controller.js";
@@ -16,8 +18,9 @@ type MemberManagementScope = {
   canApproveAreaMembers: boolean;
 };
 
-async function getMemberManagementScope(userId: string, workspaceId: string): Promise<MemberManagementScope> {
+async function getMemberManagementScope(userId: string, workspaceId: string, directoryOnly = false): Promise<MemberManagementScope> {
   const requester = await assertWorkspaceMember(userId, workspaceId);
+  if (requester.userType !== "INTERNAL") throw new AppError(403, "MEMBER_MANAGEMENT_DENIED", "Los usuarios externos no administran personas.");
   const localityScopes = await prisma.workspaceMemberLocality.findMany({
     where: { workspaceMemberId: requester.id },
     select: { localityId: true }
@@ -31,7 +34,7 @@ async function getMemberManagementScope(userId: string, workspaceId: string): Pr
     (await roleHasPermission(requester.roleId ?? undefined, "workspace.manage"));
   const canApproveAreaMembers = await roleHasPermission(requester.roleId ?? undefined, "area.approve_members");
 
-  if (!canManageWorkspaceMembers && !canApproveAreaMembers) {
+  if (!canManageWorkspaceMembers && !canApproveAreaMembers && !(directoryOnly && await roleHasPermission(requester.roleId ?? undefined, "project.manage_members"))) {
     throw new AppError(403, "PERMISSION_DENIED", "Member management permission is required.");
   }
 
@@ -130,7 +133,8 @@ async function assertCanCreateWorkspace(userId: string) {
   const memberships = await prisma.workspaceMember.findMany({
     where: {
       userId,
-      status: "ACTIVE"
+      status: "ACTIVE",
+      userType: "INTERNAL"
     },
     select: {
       roleId: true
@@ -149,10 +153,11 @@ async function assertCanCreateWorkspace(userId: string) {
 }
 
 function assertLocalityScope(scope: MemberManagementScope, selectedLocalityIds: string[]) {
-  if (scope.canManageWorkspaceMembers || selectedLocalityIds.length === 0 || scope.requesterLocalityIds.length === 0) {
+  if (scope.canManageWorkspaceMembers || scope.requesterLocalityIds.length === 0) {
     return;
   }
 
+  if (selectedLocalityIds.length === 0) throw new AppError(403, "LOCALITY_SCOPE_REQUIRED", "Selecciona al menos una de tus localidades permitidas. No puedes conceder acceso a toda el área.");
   const allowedLocalityIds = new Set(scope.requesterLocalityIds);
   const hasDeniedLocality = selectedLocalityIds.some((localityId) => !allowedLocalityIds.has(localityId));
 
@@ -299,7 +304,7 @@ function rolePayload(role?: RoleWithPermissions) {
     id: role.id,
     workspaceId: role.workspaceId,
     name: role.name,
-    description: role.description ?? undefined,
+    description: (role.isSystem ? ROLE_DEFINITIONS.find(definition => definition.name === role.name)?.description : undefined) ?? role.description ?? undefined,
     isSystem: role.isSystem
   };
 }
@@ -351,19 +356,19 @@ export async function listWorkspaces(req: Request, res: Response) {
   });
 
   res.json({
-    workspaces: memberships.map((membership) => ({
+    workspaces: await Promise.all(memberships.map(async (membership) => ({
       ...membership.workspace,
       member: {
         userType: membership.userType,
         status: membership.status,
         role: rolePayload(membership.role ?? undefined),
-        permissions: permissionKeysFromRole(membership.role ?? undefined),
+        permissions: effectivePermissions(await getRolePermissions(membership.roleId ?? undefined, membership.workspaceId), undefined, membership.userType),
         area: membership.area,
         locality: membership.locality,
         localityScopes: membership.localityScopes,
         position: membership.position
       }
-    }))
+    })))
   });
 }
 
@@ -434,7 +439,7 @@ export async function createWorkspace(req: Request, res: Response) {
         userType: membership.userType,
         status: membership.status,
         role: rolePayload(membership.role ?? undefined),
-        permissions: permissionKeysFromRole(membership.role ?? undefined),
+        permissions: effectivePermissions(await getRolePermissions(membership.roleId ?? undefined, membership.workspaceId), undefined, membership.userType),
         area: membership.area,
         locality: membership.locality,
         localityScopes: membership.localityScopes,
@@ -450,7 +455,7 @@ export async function listWorkspaceMembers(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const workspaceId = getParam(req, "workspaceId");
 
-  const scope = await getMemberManagementScope(userId, workspaceId);
+  const scope = await getMemberManagementScope(userId, workspaceId, true);
 
   const members = await prisma.workspaceMember.findMany({
     where: {
@@ -498,10 +503,11 @@ export async function inviteUser(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const workspaceId = getParam(req, "workspaceId");
   const { email, userType, projectId, expiresInDays } = req.body;
+  if (userType === "EXTERNAL" && !projectId) throw new AppError(400, "EXTERNAL_PROJECT_REQUIRED", "Selecciona el proyecto que compartirás con la persona externa.");
   const roleId = req.body.roleId || await resolveDefaultRoleId(workspaceId, userType);
   const scope = await getMemberManagementScope(userId, workspaceId);
   const selectedAreaId = req.body.areaId || scope.requester.areaId;
-  const selectedLocalityIds = readRequestedLocalityIds(req.body, scope.requester.localityId ?? undefined);
+  const selectedLocalityIds = req.body.localityIds !== undefined ? readRequestedLocalityIds(req.body) : readRequestedLocalityIds(req.body, scope.requester.localityId ?? undefined);
   const selectedLocalityId = primaryLocalityId(selectedLocalityIds);
   const selectedPositionId = req.body.positionId;
 
@@ -517,6 +523,7 @@ export async function inviteUser(req: Request, res: Response) {
 
   assertLocalityScope(scope, selectedLocalityIds);
 
+  await assertRoleGrant(userId, workspaceId, roleId, userType);
   const role = await prisma.role.findFirst({ where: { id: roleId, workspaceId } });
   if (!role) {
     throw new AppError(400, "ROLE_INVALID", "Role does not belong to this workspace.");
@@ -548,6 +555,8 @@ export async function inviteUser(req: Request, res: Response) {
     }
   }
 
+  const existingMember = await prisma.workspaceMember.findFirst({ where: { workspaceId, user: { email }, status: { in: ['ACTIVE', 'SUSPENDED'] } } });
+  if (existingMember) throw new AppError(409, 'MEMBER_ALREADY_EXISTS', 'Esta persona ya pertenece a la empresa. Administra su acceso desde Personas.');
   const { rawToken, tokenHash } = await createInvitationToken();
   const invitationExpiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
 
@@ -598,7 +607,7 @@ export async function inviteUser(req: Request, res: Response) {
         userType,
         roleId,
         areaId: selectedAreaId,
-        localityId: selectedLocalityId,
+        localityId: selectedLocalityId ?? null,
         localityIds: selectedLocalityIds,
         positionId: selectedPositionId,
         projectId
@@ -627,14 +636,47 @@ export async function listWorkspaceRoles(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const workspaceId = getParam(req, "workspaceId");
 
-  await assertWorkspacePermission(userId, workspaceId, "workspace.invite_users");
+  const requester = await assertWorkspaceMember(userId, workspaceId);
+  const actor = await getRolePermissions(requester.roleId ?? undefined, workspaceId);
+  if (requester.userType !== "INTERNAL" || !actor.some((key) => ["workspace.invite_users", "project.manage_members", "member.manage", "area.approve_members"].includes(key))) throw new AppError(403, "PERMISSION_DENIED", "No puedes administrar roles.");
 
   const roles = await prisma.role.findMany({
     where: { workspaceId },
     orderBy: { name: "asc" }
   });
 
-  res.json({ roles });
+  const availableRoles = await Promise.all(roles.map(async (role) => ({ ...role, permissions: await getRolePermissions(role.id, workspaceId) })));
+  res.json({ roles: availableRoles.filter((role) => canGrantRole({ actor, target: role.permissions, userType: "INTERNAL" })) });
+}
+
+export async function listWorkspaceInvitations(req: Request, res: Response) {
+  const workspaceId = getParam(req, 'workspaceId');
+  await assertWorkspacePermission(req.auth!.userId, workspaceId, 'workspace.invite_users');
+  const scope = await getMemberManagementScope(req.auth!.userId, workspaceId);
+  const rows = await prisma.invitation.findMany({ where: { workspaceId, ...(scope.canManageWorkspaceMembers ? {} : { areaId: scope.requester.areaId,
+    ...(scope.requesterLocalityIds.length ? { localityScopes: { some: { localityId: { in: scope.requesterLocalityIds } } } } : {}) }) },
+    take: 50, orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+    select: { id: true, email: true, userType: true, status: true, expiresAt: true, createdAt: true, roleId: true, role: { select: { id: true, name: true, isSystem: true } }, area: { select: { name: true } } } });
+  const actor = await getRolePermissions(scope.requester.roleId ?? undefined, workspaceId);
+  const invitations = await Promise.all(rows.map(async row => ({ ...row, canRevoke: row.status === 'PENDING' && row.expiresAt > new Date() && canGrantRole({ actor, target: await getRolePermissions(row.roleId ?? undefined, workspaceId), userType: row.userType }) })));
+  res.json({ invitations });
+}
+
+export async function revokeWorkspaceInvitation(req: Request, res: Response) {
+  const workspaceId = getParam(req, 'workspaceId');
+  await assertWorkspacePermission(req.auth!.userId, workspaceId, 'workspace.invite_users');
+  const scope = await getMemberManagementScope(req.auth!.userId, workspaceId);
+  const invitation = await prisma.invitation.findFirst({ where: { id: getParam(req, 'invitationId'), workspaceId }, include: { localityScopes: { select: { localityId: true } } } });
+  if (!invitation) throw new AppError(404, 'INVITATION_NOT_FOUND', 'No se encontró la invitación.');
+  assertExistingMemberInScope(scope, invitation);
+  if (invitation.roleId) await assertRoleGrant(req.auth!.userId, workspaceId, invitation.roleId, invitation.userType);
+  if (invitation.status !== 'PENDING' || invitation.expiresAt <= new Date()) throw new AppError(409, 'INVITATION_ALREADY_CLOSED', 'Esta invitación ya no está pendiente.');
+  await prisma.$transaction(async tx => {
+    await tx.invitation.update({ where: { id: invitation.id, status: 'PENDING', updatedAt: invitation.updatedAt }, data: { status: 'REVOKED', revokedAt: new Date() } });
+    await tx.activityLog.create({ data: { workspaceId, actorId: req.auth!.userId, entityType: 'INVITATION', entityId: invitation.id, action: 'invitation.revoked' } });
+  });
+  emitRealtimeEvent({ type: 'workspace.user_invited', workspaceId, actorId: req.auth!.userId, title: 'Invitación cancelada', message: 'El enlace de invitación ha dejado de ser válido.' });
+  res.status(204).end();
 }
 
 export async function listWorkspaceAreas(req: Request, res: Response) {
@@ -642,6 +684,7 @@ export async function listWorkspaceAreas(req: Request, res: Response) {
   const workspaceId = getParam(req, "workspaceId");
 
   const requester = await assertWorkspaceMember(userId, workspaceId);
+  if (requester.userType !== "INTERNAL") throw new AppError(403, "ORGANIZATION_ACCESS_DENIED", "El catálogo de organización es exclusivo del equipo interno.");
   const canSeeAllAreas = await canManageWorkspaceStructure(requester.roleId ?? undefined);
   const where: Prisma.AreaWhereInput =
     canSeeAllAreas || !requester.areaId
@@ -662,22 +705,7 @@ export async function createWorkspaceArea(req: Request, res: Response) {
 
   await assertWorkspacePermission(userId, workspaceId, "area.manage");
 
-  const area = await prisma.area.upsert({
-    where: {
-      workspaceId_name: {
-        workspaceId,
-        name: req.body.name
-      }
-    },
-    update: {
-      description: req.body.description
-    },
-    create: {
-      workspaceId,
-      name: req.body.name,
-      description: req.body.description
-    }
-  });
+  const area = await prisma.area.create({ data: { workspaceId, name: req.body.name, description: req.body.description } });
 
   emitRealtimeEvent({
     type: "workspace.area_saved",
@@ -695,6 +723,7 @@ export async function listWorkspaceLocalities(req: Request, res: Response) {
   const workspaceId = getParam(req, "workspaceId");
 
   const requester = await assertWorkspaceMember(userId, workspaceId);
+  if (requester.userType !== "INTERNAL") throw new AppError(403, "ORGANIZATION_ACCESS_DENIED", "El catálogo de organización es exclusivo del equipo interno.");
   const localityScopes = await prisma.workspaceMemberLocality.findMany({
     where: { workspaceMemberId: requester.id },
     select: { localityId: true }
@@ -765,31 +794,8 @@ export async function createWorkspaceLocality(req: Request, res: Response) {
     }
   });
 
-  const locality = existingLocality
-    ? await prisma.locality.update({
-      where: {
-        id: existingLocality.id
-      },
-      data: {
-        name: req.body.name,
-        description: req.body.description
-      },
-      include: {
-        area: true
-      }
-    })
-    : await prisma.locality.create({
-      data: {
-        workspaceId,
-        areaId: selectedAreaId,
-        name: req.body.name,
-        code: req.body.code,
-        description: req.body.description
-      },
-      include: {
-        area: true
-      }
-    });
+  if (existingLocality) throw new AppError(409, 'LOCALITY_CODE_EXISTS', 'Ya existe una localidad con ese código. Edítala desde Organización.');
+  const locality = await prisma.locality.create({ data: { workspaceId, areaId: selectedAreaId, name: req.body.name, code: req.body.code, description: req.body.description }, include: { area: true } });
 
   emitRealtimeEvent({
     type: "workspace.locality_saved",
@@ -806,6 +812,7 @@ export async function listWorkspacePositions(req: Request, res: Response) {
   const userId = req.auth!.userId;
   const workspaceId = getParam(req, "workspaceId");
   const requester = await assertWorkspaceMember(userId, workspaceId);
+  if (requester.userType !== "INTERNAL") throw new AppError(403, "ORGANIZATION_ACCESS_DENIED", "El catálogo de organización es exclusivo del equipo interno.");
   const canManageAreas =
     (await roleHasPermission(requester.roleId ?? undefined, "area.manage")) ||
     (await roleHasPermission(requester.roleId ?? undefined, "member.manage"));
@@ -845,29 +852,7 @@ export async function createWorkspacePosition(req: Request, res: Response) {
 
   await assertAreaBelongsToWorkspace(workspaceId, selectedAreaId);
 
-  const position = await prisma.position.upsert({
-    where: {
-      workspaceId_areaId_name: {
-        workspaceId,
-        areaId: selectedAreaId,
-        name: req.body.name
-      }
-    },
-    update: {
-      description: req.body.description,
-      isManager: req.body.isManager
-    },
-    create: {
-      workspaceId,
-      areaId: selectedAreaId,
-      name: req.body.name,
-      description: req.body.description,
-      isManager: req.body.isManager
-    },
-    include: {
-      area: true
-    }
-  });
+  const position = await prisma.position.create({ data: { workspaceId, areaId: selectedAreaId, name: req.body.name, description: req.body.description, isManager: req.body.isManager }, include: { area: true } });
 
   emitRealtimeEvent({
     type: "workspace.position_saved",
@@ -950,6 +935,7 @@ export async function updateWorkspaceMember(req: Request, res: Response) {
   }
 
   assertExistingMemberInScope(scope, currentMember);
+  if (currentMember.roleId) await assertRoleGrant(userId, workspaceId, currentMember.roleId, currentMember.userType);
 
   const selectedAreaId = req.body.areaId || currentMember.areaId;
   if (!selectedAreaId) {
@@ -966,13 +952,16 @@ export async function updateWorkspaceMember(req: Request, res: Response) {
     ...(currentMember.localityId ? [currentMember.localityId] : [])
   ]);
   const bodyLocalityIds = readRequestedLocalityIds(req.body);
-  const selectedLocalityIds = bodyLocalityIds.length > 0 ? bodyLocalityIds : existingLocalityIds;
+  const selectedLocalityIds = req.body.localityIds !== undefined || req.body.localityId !== undefined ? bodyLocalityIds : existingLocalityIds;
   const selectedLocalityId = primaryLocalityId(selectedLocalityIds);
   assertLocalityScope(scope, selectedLocalityIds);
   await assertLocalitiesBelongToWorkspace(workspaceId, selectedLocalityIds, selectedArea.id);
 
   const selectedUserType = req.body.userType || currentMember.userType;
   const selectedRoleId = req.body.roleId || currentMember.roleId || await resolveDefaultRoleId(workspaceId, selectedUserType);
+  await assertRoleGrant(userId, workspaceId, selectedRoleId, selectedUserType);
+  if (currentMember.userId === userId && (selectedRoleId !== currentMember.roleId || selectedUserType !== currentMember.userType)) throw new AppError(403, "SELF_ROLE_CHANGE_DENIED", "Otro administrador debe cambiar tu rol o tipo de acceso.");
+  if (!scope.canManageWorkspaceMembers && currentMember.userId === userId) throw new AppError(403, "SELF_ACCESS_CHANGE_DENIED", "Solicita a administración los cambios de tu propio acceso.");
   const role = await prisma.role.findFirst({
     where: {
       id: selectedRoleId,
@@ -984,18 +973,18 @@ export async function updateWorkspaceMember(req: Request, res: Response) {
     throw new AppError(400, "ROLE_INVALID", "Role does not belong to this workspace.");
   }
 
-  const selectedPositionId = req.body.positionId || currentMember.positionId;
+  const selectedPositionId = req.body.positionId !== undefined ? req.body.positionId : currentMember.positionId;
   if (selectedPositionId) {
     await assertPositionBelongsToWorkspace(workspaceId, selectedPositionId, selectedArea.id);
   }
 
   const member = await prisma.$transaction(async (tx) => {
     const updatedMember = await tx.workspaceMember.update({
-      where: { id: currentMember.id },
+      where: { id: currentMember.id, updatedAt: req.body.expectedUpdatedAt ? new Date(req.body.expectedUpdatedAt) : currentMember.updatedAt },
       data: {
         roleId: role.id,
         areaId: selectedArea.id,
-        localityId: selectedLocalityId,
+        localityId: selectedLocalityId ?? null,
         positionId: selectedPositionId,
         userType: selectedUserType
       }
@@ -1055,7 +1044,7 @@ export async function updateWorkspaceMember(req: Request, res: Response) {
       after: {
         roleId: role.id,
         areaId: selectedArea.id,
-        localityId: selectedLocalityId,
+        localityId: selectedLocalityId ?? null,
         localityIds: selectedLocalityIds,
         positionId: selectedPositionId,
         userType: selectedUserType
@@ -1112,6 +1101,8 @@ export async function approveWorkspaceMember(req: Request, res: Response) {
     throw new AppError(409, "MEMBER_BLOCKED", "Suspended or removed members cannot be approved directly.");
   }
 
+  if (pendingMember.status !== "PENDING_APPROVAL") throw new AppError(409, "MEMBER_ALREADY_PROCESSED", "Esta solicitud ya fue procesada.");
+  assertExistingMemberInScope(scope, pendingMember);
   const selectedAreaId = req.body.areaId || pendingMember.areaId;
 
   if (!selectedAreaId) {
@@ -1128,7 +1119,7 @@ export async function approveWorkspaceMember(req: Request, res: Response) {
     ...(pendingMember.localityId ? [pendingMember.localityId] : [])
   ]);
   const bodyLocalityIds = readRequestedLocalityIds(req.body);
-  const selectedLocalityIds = bodyLocalityIds.length > 0
+  const selectedLocalityIds = req.body.localityIds !== undefined || req.body.localityId !== undefined
     ? bodyLocalityIds
     : existingLocalityIds.length > 0
       ? existingLocalityIds
@@ -1137,6 +1128,7 @@ export async function approveWorkspaceMember(req: Request, res: Response) {
   assertLocalityScope(scope, selectedLocalityIds);
   const selectedUserType = req.body.userType || pendingMember.userType;
   const selectedRoleId = req.body.roleId || pendingMember.roleId || await resolveDefaultRoleId(workspaceId, selectedUserType);
+  await assertRoleGrant(userId, workspaceId, selectedRoleId, selectedUserType);
   const role = await prisma.role.findFirst({
     where: {
       id: selectedRoleId,
@@ -1155,7 +1147,7 @@ export async function approveWorkspaceMember(req: Request, res: Response) {
       name: selectedUserType === "EXTERNAL" ? "Colaborador" : "Colaborador"
     }
   });
-  const selectedPositionId = req.body.positionId || pendingMember.positionId || fallbackPosition?.id;
+  const selectedPositionId = req.body.positionId !== undefined ? req.body.positionId : pendingMember.positionId || fallbackPosition?.id;
 
   if (selectedPositionId) {
     await assertPositionBelongsToWorkspace(workspaceId, selectedPositionId, selectedArea.id);
@@ -1167,12 +1159,12 @@ export async function approveWorkspaceMember(req: Request, res: Response) {
   const member = await prisma.$transaction(async (tx) => {
     const approvedMember = await tx.workspaceMember.update({
       where: {
-        id: pendingMember.id
+        id: pendingMember.id, status: "PENDING_APPROVAL", updatedAt: pendingMember.updatedAt
       },
       data: {
         roleId: role.id,
         areaId: selectedArea.id,
-        localityId: selectedLocalityId,
+        localityId: selectedLocalityId ?? null,
         positionId: selectedPositionId,
         userType: selectedUserType,
         status: "ACTIVE",
@@ -1231,7 +1223,7 @@ export async function approveWorkspaceMember(req: Request, res: Response) {
         userId: pendingMember.userId,
         roleId: role.id,
         areaId: selectedArea.id,
-        localityId: selectedLocalityId,
+        localityId: selectedLocalityId ?? null,
         localityIds: selectedLocalityIds,
         positionId: selectedPositionId,
         userType: selectedUserType

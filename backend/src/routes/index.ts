@@ -1,3 +1,5 @@
+import { chatRouter } from './chat.routes.js';
+import { notificationRouter } from "./notification.routes.js";
 import { Router } from "express";
 import { authRouter } from "./auth.routes.js";
 import { boardRouter } from "./board.routes.js";
@@ -16,3 +18,7 @@ apiRouter.use("/", boardRouter);
 apiRouter.use("/", taskRouter);
 apiRouter.use("/staffing-requests", staffingRouter);
 apiRouter.use("/reports", reportRouter);
+
+apiRouter.use("/", notificationRouter);
+
+apiRouter.use("/", chatRouter);

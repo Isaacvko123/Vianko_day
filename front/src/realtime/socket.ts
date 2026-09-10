@@ -22,7 +22,10 @@ export type RealtimeEvent = {
   workspaceId: string;
   projectId?: string;
   boardId?: string;
+  requestId?: string;
   taskId?: string;
+  commentId?: string;
+  chatId?: string;
   actorId?: string;
   title: string;
   message: string;
@@ -56,7 +59,7 @@ export function connectRealtime(token: string): RealtimeSocket {
     auth: { token },
     transports: ["websocket"],
     reconnection: true,
-    reconnectionAttempts: 5,
+    reconnectionAttempts: Infinity,
     reconnectionDelay: 800,
     timeout: 8_000
   });

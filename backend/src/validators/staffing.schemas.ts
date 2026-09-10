@@ -4,6 +4,7 @@ import { paginationQuery, uuidParam } from "./common.schemas.js";
 export const listStaffingRequestsSchema = z.object({
   query: paginationQuery.extend({
     workspaceId: uuidParam,
+    requestId: uuidParam.optional(),
     status: z.enum(["PENDING", "APPROVED", "REJECTED", "CANCELLED"]).optional()
   })
 });

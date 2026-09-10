@@ -46,7 +46,16 @@ export const updateTaskSchema = z.object({
     startAt: dateString,
     dueAt: dateString,
     estimateMinutes: z.number().int().min(0).max(100000).optional(),
-    progress: z.number().int().min(0).max(100).optional()
+    progress: z.number().int().min(0).max(100).optional(),
+    clearFields: z.array(z.enum(["startAt", "dueAt", "estimateMinutes"])).max(3).optional(),
+    expectedUpdatedAt: dateString
+  }).superRefine((body, context) => {
+    for (const field of body.clearFields ?? []) {
+      if (body[field] !== undefined) context.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: "No puedes asignar y borrar el mismo campo." });
+    }
+    if (!Object.entries(body).some(([key, value]) => key !== "expectedUpdatedAt" && (key === "clearFields" ? body.clearFields?.length : value !== undefined))) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "Indica al menos un campo para actualizar." });
+    }
   })
 });
 

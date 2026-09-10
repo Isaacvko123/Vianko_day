@@ -1,16 +1,16 @@
-import { useEffect, useMemo, useState } from "react";
+import { refreshSharedSession } from "../lib/session-refresh";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "react-router-dom";
 import {
   createWorkspace,
   listWorkspaces,
   logout,
-  refreshSession,
   type CreateProjectInput,
   type CreateWorkspaceInput,
   type UpdateProjectInput
 } from "../api/endpoints";
-import { authSessionExpiredEventName, type AuthSessionExpiredDetail } from "../api/http";
+import { ApiError, apiRequest, authSessionExpiredEventName, type AuthSessionExpiredDetail } from "../api/http";
 import { getWorkspaceCapabilities } from "../lib/permissions";
 import { queryKeys } from "../lib/queryKeys";
 import {
@@ -24,6 +24,7 @@ import {
   storeWorkspace
 } from "../lib/storage";
 import type { AuthSession, ViewKey, WorkspaceListItem } from "../types";
+import { useNotificationInbox, type InboxItem } from "./useNotificationInbox";
 import { useBrowserNotifications } from "./useBrowserNotifications";
 import { useManagementController } from "./useManagementController";
 import { useProjectBoardController } from "./useProjectBoardController";
@@ -42,6 +43,10 @@ function viewToPath(view: ViewKey) {
 }
 
 function pathToView(pathname: string): ViewKey | undefined {
+  if (pathname === "/work") return "work";
+  if (pathname === "/roles") return "roles";
+  if (pathname === "/organization") return "organization";
+  if (pathname === "/notifications") return "notifications";
   const normalizedPath = pathname.replace(/\/+$/, "") || "/";
 
   if (normalizedPath === "/projects") {
@@ -92,7 +97,9 @@ export function useAppController() {
     dismissNotification,
     requestBrowserNotifications,
     pushRealtimeNotification
-  } = useBrowserNotifications(session?.user.id);
+  } = useBrowserNotifications(session?.user.id, token, getWorkspaceCapabilities(selectedWorkspace).canViewManagement);
+  const inbox = useNotificationInbox(token, workspaceId, session?.user.id);
+  const deepLinkRef = useRef<string>();
 
   const projectBoard = useProjectBoardController({
     token,
@@ -105,6 +112,8 @@ export function useAppController() {
     token,
     workspaceId,
     canLoadMemberDirectory: permissions.canLoadManagementData,
+    canLoadCatalog: selectedWorkspace?.member.userType === "INTERNAL",
+    canApproveMembers: Boolean(selectedWorkspace?.member.permissions?.some((key) => ["workspace.manage", "member.manage", "area.approve_members"].includes(key))),
     onError: setGlobalError
   });
 
@@ -121,6 +130,17 @@ export function useAppController() {
     enabled: currentView === "reports" && permissions.canViewWorkspaceReports,
     onError: setGlobalError
   });
+
+  useEffect(() => {
+    function syncSession(event: StorageEvent) {
+      if (event.key !== "vianko-day.auth") return;
+      const nextSession = readStoredSession();
+      if (!nextSession || nextSession.user.id !== session?.user.id) { queryClient.clear(); clearWorkspaceSelection(); }
+      setSession(nextSession);
+    }
+    window.addEventListener("storage", syncSession);
+    return () => window.removeEventListener("storage", syncSession);
+  }, [session?.user.id]);
 
   function applyWorkspaces(nextWorkspaces: WorkspaceListItem[]) {
     setWorkspaces(nextWorkspaces);
@@ -139,6 +159,10 @@ export function useAppController() {
     if (firstWorkspace) {
       setSelectedWorkspace(firstWorkspace);
       storeWorkspace(firstWorkspace);
+    } else {
+      clearStoredWorkspace();
+      setSelectedWorkspace(undefined);
+      resetWorkspaceState();
     }
   }
 
@@ -192,22 +216,18 @@ export function useAppController() {
 
       if (shouldRefreshSessionAccessToken(currentSession)) {
         try {
-          const response = await refreshSession(currentSession.tokens.refreshToken);
+          const refreshed = await refreshSharedSession(currentSession);
 
           if (isCancelled) {
             return;
           }
 
-          sessionForRequest = storeSession({
-            ...currentSession,
-            tokens: response.tokens
-          });
+          sessionForRequest = refreshed;
           setSession(sessionForRequest);
           void queryClient.invalidateQueries();
-        } catch {
-          if (!isCancelled) {
-            handleLogout();
-          }
+        } catch (error) {
+          if (!isCancelled && error instanceof ApiError && error.status === 401) handleLogout();
+          else if (!isCancelled) setGlobalError("No se pudo renovar la conexión. Volveremos a intentarlo automáticamente.");
           return;
         }
       }
@@ -234,24 +254,18 @@ export function useAppController() {
     let isCancelled = false;
 
     const refreshTimer = window.setTimeout(() => {
-      void refreshSession(session.tokens.refreshToken)
-        .then((response) => {
+      void refreshSharedSession(session)
+        .then((refreshedSession) => {
           if (isCancelled) {
             return;
           }
 
-          const refreshedSession = storeSession({
-            ...session,
-            tokens: response.tokens
-          });
-
           setSession(refreshedSession);
           void queryClient.invalidateQueries();
         })
-        .catch(() => {
-          if (!isCancelled) {
-            handleLogout();
-          }
+        .catch((error) => {
+          if (!isCancelled && error instanceof ApiError && error.status === 401) handleLogout();
+          else if (!isCancelled) setGlobalError("No se pudo renovar la conexión. Volveremos a intentarlo automáticamente.");
         });
     }, refreshDelayMs);
 
@@ -260,6 +274,18 @@ export function useAppController() {
       window.clearTimeout(refreshTimer);
     };
   }, [session?.tokens.accessToken, session?.tokens.expiresIn, session?.tokens.refreshToken, queryClient]);
+
+  useEffect(() => {
+    if (!session) return;
+    let cancelled = false;
+    const recover = () => {
+      if (!shouldRefreshSessionAccessToken(session)) return;
+      void refreshSharedSession(session).then(next => { if (!cancelled) { setSession(next); setGlobalError(""); } }).catch(() => undefined);
+    };
+    window.addEventListener("online", recover);
+    const timer = window.setInterval(recover, 15000);
+    return () => { cancelled = true; window.clearInterval(timer); window.removeEventListener("online", recover); };
+  }, [session?.tokens.refreshToken, session?.tokens.expiresAt]);
 
   useEffect(() => {
     if (workspacesQuery.data) {
@@ -320,9 +346,7 @@ export function useAppController() {
       void reports.actions.loadReports({ silent: true });
     }
 
-    if (currentView === "completed") {
-      void projectBoard.actions.loadCompletedArchive({ silent: true });
-    }
+
   }, [
     currentView,
     token,
@@ -334,9 +358,11 @@ export function useAppController() {
   ]);
 
   function handleAuthenticated(nextSession: AuthSession) {
+    if (session?.user.id !== nextSession.user.id) { queryClient.clear(); clearWorkspaceSelection(); }
     const storedSession = storeSession(nextSession);
     setSession(storedSession);
-    navigate("/workspaces", { replace: true });
+    const pending = sessionStorage.getItem("vianko-pending-link");
+    navigate(pending?.startsWith("/") && !pending.startsWith("//") ? pending : "/work", { replace: true });
   }
 
   function resetWorkspaceState() {
@@ -347,10 +373,12 @@ export function useAppController() {
   }
 
   function handleWorkspaceSelect(workspace: WorkspaceListItem) {
-    resetWorkspaceState();
+    if (workspace.id !== workspaceId) resetWorkspaceState();
+    void queryClient.invalidateQueries({ queryKey: queryKeys.projects(workspace.id) });
     setSelectedWorkspace(workspace);
     storeWorkspace(workspace);
-    navigate("/projects");
+    const pending = sessionStorage.getItem("vianko-pending-link");
+    navigate(pending?.startsWith("/") && !pending.startsWith("//") ? pending : "/work");
   }
 
   async function handleCreateWorkspace(input: CreateWorkspaceInput) {
@@ -402,6 +430,11 @@ export function useAppController() {
   }
 
   function handleLogout() {
+    if ("serviceWorker" in navigator && token) void navigator.serviceWorker.getRegistration().then(async (registration) => {
+      const subscription = await registration?.pushManager.getSubscription();
+      if (subscription) { await apiRequest("/push/subscriptions", { token, method: "DELETE", body: { endpoint: subscription.endpoint } }); await subscription.unsubscribe(); }
+    }).catch(() => undefined);
+    queryClient.clear();
     if (session) {
       void logout(session.tokens.refreshToken).catch(() => undefined);
     }
@@ -423,16 +456,47 @@ export function useAppController() {
     navigate("/login");
   }
 
-  useRealtimeSync({
+  useEffect(() => {
+    if (!session && location.search && !["/login", "/workspaces"].includes(location.pathname)) sessionStorage.setItem("vianko-pending-link", location.pathname + location.search);
+    if (!token || !workspaces.length || !location.search) return;
+    const query = new URLSearchParams(location.search);
+    const requestedWorkspace = workspaces.find((workspace) => workspace.id === query.get("workspace"));
+    if (requestedWorkspace && requestedWorkspace.id !== workspaceId) { resetWorkspaceState(); setSelectedWorkspace(requestedWorkspace); storeWorkspace(requestedWorkspace); return; }
+    if (query.get("workspace") && !requestedWorkspace) { setGlobalError("Ya no tienes acceso a la empresa de este aviso."); return; }
+    if (deepLinkRef.current === location.key) return;
+    deepLinkRef.current = location.key;
+    const projectId = query.get("project"); const taskId = query.get("task");
+    if (query.has("chat")) projectBoard.actions.setSelectedTaskId(undefined);
+    if (projectId && taskId) projectBoard.actions.handleOpenArchivedTask(projectId, taskId);
+    else if (projectId) projectBoard.actions.setActiveProjectId(projectId);
+    sessionStorage.removeItem("vianko-pending-link");
+  }, [location.key, location.search, token, workspaceId, workspaces]);
+
+  useEffect(() => {
+    const handler = (event: MessageEvent) => {
+      const target = event.data?.navigate;
+      if (typeof target === "string" && target.startsWith("/") && !target.startsWith("//")) navigate(target);
+    };
+    navigator.serviceWorker?.addEventListener("message", handler);
+    return () => navigator.serviceWorker?.removeEventListener("message", handler);
+  }, [navigate]);
+
+  function openNotification(item: InboxItem) {
+    void inbox.markRead([item.id]).catch(() => setGlobalError("Se abrió el aviso, pero no se pudo marcar como leído."));
+    navigate(item.url);
+  }
+
+  const realtime = useRealtimeSync({
     token,
     workspaceId,
     activeProjectId: projectBoard.activeProjectId,
     selectedTaskId: projectBoard.selectedTaskId,
     canLoadManagementData: permissions.canLoadManagementData,
     refresh: {
+      notifications: () => { void inbox.refresh(); void queryClient.invalidateQueries({queryKey:['project-chat']}); void queryClient.invalidateQueries({queryKey:['chat-messages']}); void queryClient.invalidateQueries({ queryKey: ['task-people'] }); void queryClient.invalidateQueries({ queryKey: ['quick-project'] }); void queryClient.invalidateQueries({ queryKey: ['work-items', workspaceId] }); void queryClient.invalidateQueries({ queryKey: ['role-catalog', workspaceId] }); void queryClient.invalidateQueries({ queryKey: ['invitations', workspaceId] }); },
       workspaces: () => void loadWorkspaces(),
       projects: (options) => void projectBoard.actions.loadProjects(options),
-      catalog: (options) => void people.actions.loadWorkspaceCatalog(options),
+      catalog: (options) => { void people.actions.loadWorkspaceCatalog(options); void queryClient.invalidateQueries({ queryKey: ['role-catalog', workspaceId] }); void queryClient.invalidateQueries({ queryKey: ['invitations', workspaceId] }); },
       members: (options) => void people.actions.loadMembers(options),
       management: (options) => {
         void management.actions.loadManagement(options);
@@ -443,15 +507,11 @@ export function useAppController() {
           void reports.actions.loadReports(options);
         }
       },
-      completedArchive: (options) => {
-        if (currentView === "completed") {
-          void projectBoard.actions.loadCompletedArchive(options);
-        }
-      },
+      completedArchive: () => { void queryClient.invalidateQueries({ queryKey: ['work-items', workspaceId] }); },
       projectContext: (projectId, options) => void projectBoard.actions.loadProjectContext(projectId, options),
       taskDetail: (taskId, options) => void projectBoard.actions.loadSelectedTaskDetail(taskId, options)
     },
-    onEvent: pushRealtimeNotification,
+    onEvent: (event) => { pushRealtimeNotification(event); void inbox.refresh(); if(event.type.startsWith('chat.')) { void queryClient.invalidateQueries({queryKey:['project-chat',event.projectId]}); void queryClient.invalidateQueries({queryKey:['chat-messages',event.chatId]}); } if (/^(workspace\.|project\.|staffing\.|task\.(created|assigned|unassigned))/.test(event.type)) { void queryClient.invalidateQueries({queryKey:['task-people']}); void queryClient.invalidateQueries({queryKey:['quick-project']}); } },
     onError: (error) => {
       if (error.code === "RATE_LIMITED") {
         setGlobalError("Tiempo real desactivado por demasiados cambios de sala. Recarga la vista para reconectar.");
@@ -478,6 +538,7 @@ export function useAppController() {
     activeProjectId: projectBoard.activeProjectId,
     activeProject: projectBoard.activeProject,
     activeBoard: projectBoard.activeBoard,
+    boards: projectBoard.boards,
     completedArchive: projectBoard.completedArchive,
     boardStatuses: projectBoard.boardStatuses,
     tasks: projectBoard.tasks,
@@ -494,6 +555,7 @@ export function useAppController() {
     areas: people.areas,
     localities: people.localities,
     positions: people.positions,
+    staffingCatalog: management.catalog,
     staffingRequests: management.staffingRequests,
     staffingPagination: management.staffingPagination,
     staffingPages: management.staffingPages,
@@ -512,6 +574,8 @@ export function useAppController() {
     isLoadingReports: reports.isLoadingReports,
     globalError,
     notifications,
+    inbox,
+    connectionState: realtime.connectionState,
     notificationPermission,
     canCreateWorkspace: canCreateWorkspaceFromMemberships(workspaces),
     permissions,
@@ -519,16 +583,21 @@ export function useAppController() {
       setCurrentView: (view: ViewKey) => navigate(viewToPath(view)),
       setActiveProjectId: projectBoard.actions.setActiveProjectId,
       setBoardMode: projectBoard.actions.setBoardMode,
+      setActiveBoardId: projectBoard.actions.setActiveBoardId,
       setSelectedTaskId: projectBoard.actions.setSelectedTaskId,
       loadWorkspaces,
+      loadWorkspaceCatalog: people.actions.loadWorkspaceCatalog,
       loadProjects: projectBoard.actions.loadProjects,
       loadProjectContext: projectBoard.actions.loadProjectContext,
+      loadSelectedTaskDetail: projectBoard.actions.loadSelectedTaskDetail,
       loadCompletedArchive: projectBoard.actions.loadCompletedArchive,
       loadMembers: people.actions.loadMembers,
       loadManagement: management.actions.loadManagement,
       loadReports: reports.actions.loadReports,
       setReportPeriod: reports.actions.setReportPeriod,
       dismissNotification,
+      openNotification,
+      openNotificationUrl: (url: string) => navigate(url),
       handleEnableBrowserNotifications: requestBrowserNotifications,
       handleAuthenticated,
       handleWorkspaceSelect,

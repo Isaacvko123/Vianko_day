@@ -27,6 +27,8 @@ async function upsertInitialAdmin(tx: Tx) {
     }
   });
 
+  if (!existingUser?.passwordHash && (!env.INITIAL_ADMIN_PASSWORD || env.INITIAL_ADMIN_PASSWORD.length < 12)) throw new Error("Define INITIAL_ADMIN_PASSWORD (mínimo 12 caracteres) para crear la cuenta inicial.");
+
   if (existingUser) {
     const updateData: Prisma.UserUpdateInput = {
       name: env.INITIAL_ADMIN_NAME,
@@ -34,7 +36,7 @@ async function upsertInitialAdmin(tx: Tx) {
     };
 
     if (!existingUser.passwordHash) {
-      updateData.passwordHash = await hashPassword(env.INITIAL_ADMIN_PASSWORD);
+      updateData.passwordHash = await hashPassword(env.INITIAL_ADMIN_PASSWORD!);
     }
 
     return tx.user.update({
@@ -49,7 +51,7 @@ async function upsertInitialAdmin(tx: Tx) {
     data: {
       name: env.INITIAL_ADMIN_NAME,
       email: env.INITIAL_ADMIN_EMAIL,
-      passwordHash: await hashPassword(env.INITIAL_ADMIN_PASSWORD),
+      passwordHash: await hashPassword(env.INITIAL_ADMIN_PASSWORD!),
       isActive: true
     }
   });

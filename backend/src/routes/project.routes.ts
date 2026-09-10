@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { addProjectMember, archiveProject, createProject, getProject, listProjects, updateProject } from "../controllers/project.controller.js";
+import { getTaskPeople, addProjectMember, archiveProject, createProject, getProject, listProjects, updateProject } from "../controllers/project.controller.js";
 import { authenticate } from "../middleware/authenticate.js";
 import { validate } from "../middleware/validate.js";
 import { asyncHandler } from "../utils/async-handler.js";
@@ -20,3 +20,5 @@ projectRouter.get("/:projectId", validate(projectIdParamsSchema), asyncHandler(g
 projectRouter.patch("/:projectId", validate(updateProjectSchema), asyncHandler(updateProject));
 projectRouter.delete("/:projectId", validate(projectIdParamsSchema), asyncHandler(archiveProject));
 projectRouter.post("/:projectId/members", validate(addProjectMemberSchema), asyncHandler(addProjectMember));
+
+projectRouter.get("/:projectId/task-people", validate(projectIdParamsSchema), asyncHandler(getTaskPeople));

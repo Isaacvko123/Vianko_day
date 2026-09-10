@@ -1,342 +1,142 @@
-import type { PermissionKey } from "../models/permissions.js";
-import { prisma } from "../db/prisma.js";
-import { activeRecordFilter } from "../db/filters.js";
-import { AppError } from "../utils/app-error.js";
+import { permissionContext } from "./permission-context.js";
+import type { PermissionKey } from '../models/permissions.js';
+import { ROLE_DEFINITIONS } from '../models/permissions.js';
+import { canAccessProject, canGrantRole, canManageProjectTasks, effectivePermissions, externalPermissions, taskCapabilities } from '../models/business-policy.js';
+import { prisma } from '../db/prisma.js';
+import { activeRecordFilter } from '../db/filters.js';
+import { AppError } from '../utils/app-error.js';
 
-/**
- * Revisa una sola clave de permiso contra un rol.
- * Los roles viven dentro del workspace, pero las claves son reutilizables entre empresas.
- */
+export function getRolePermissions(roleId: string | undefined, workspaceId?: string): Promise<PermissionKey[]> {
+  const cache = permissionContext.getStore();
+  const key = `${workspaceId ?? ""}:${roleId ?? ""}`;
+  const cached = cache?.get(key);
+  if (cached) return cached;
+  const result = readRolePermissions(roleId, workspaceId);
+  cache?.set(key, result);
+  return result;
+}
+async function readRolePermissions(roleId: string | undefined, workspaceId?: string): Promise<PermissionKey[]> {
+  if (!roleId) return [];
+  const role = await prisma.role.findUnique({ where: { id: roleId }, include: { permissions: { include: { permission: true } } } });
+  if (!role || (workspaceId && role.workspaceId !== workspaceId)) return [];
+  // System roles follow the versioned catalog, including companies created before a release.
+  const systemRole = role.isSystem ? ROLE_DEFINITIONS.find((definition) => definition.name === role.name) : undefined;
+  return systemRole?.permissions ?? role.permissions.filter((item) => item.permission.workspaceId === role.workspaceId).map((item) => item.permission.key as PermissionKey);
+}
 export async function roleHasPermission(roleId: string | undefined, permissionKey: PermissionKey) {
-  if (!roleId) {
-    return false;
-  }
-
-  const count = await prisma.rolePermission.count({
-    where: {
-      roleId,
-      permission: {
-        key: permissionKey
-      }
-    }
-  });
-
-  return count > 0;
+  return (await getRolePermissions(roleId)).includes(permissionKey);
 }
-
-async function roleHasAnyPermission(roleId: string | undefined, permissionKeys: PermissionKey[]) {
-  if (!roleId) {
-    return false;
-  }
-
-  const count = await prisma.rolePermission.count({
-    where: {
-      roleId,
-      permission: {
-        key: {
-          in: permissionKeys
-        }
-      }
-    }
-  });
-
-  return count > 0;
-}
-
-function equivalentProjectPermissions(permissionKey: PermissionKey): PermissionKey[] {
-  if (permissionKey === "task.update") {
-    return ["task.update", "task.create"];
-  }
-
-  return [permissionKey];
-}
-
-/**
- * Toda operacion privada empieza aqui: el usuario debe ser miembro ACTIVE del workspace.
- * Suspendidos, removidos e invitados fallan antes de llegar a proyectos o tareas.
- */
 export async function assertWorkspaceMember(userId: string, workspaceId: string) {
-  const workspaceMembership = await prisma.workspaceMember.findUnique({
-    where: {
-      workspaceId_userId: {
-        workspaceId,
-        userId
-      }
-    }
+  const member = await prisma.workspaceMember.findUnique({
+    where: { workspaceId_userId: { workspaceId, userId } }, include: { workspace: true, user: { select: { isActive: true } } }
   });
-
-  if (!workspaceMembership || workspaceMembership.status !== "ACTIVE") {
-    throw new AppError(403, "WORKSPACE_ACCESS_DENIED", "You do not have access to this workspace.");
+  if (!member || member.status !== 'ACTIVE' || !member.workspace.isActive || !member.user.isActive) {
+    throw new AppError(403, 'WORKSPACE_ACCESS_DENIED', 'No tienes acceso activo a esta empresa.');
   }
-
-  return workspaceMembership;
-}
-
-export async function assertWorkspacePermission(
-  userId: string,
-  workspaceId: string,
-  permissionKey: PermissionKey
-) {
-  const workspaceMembership = await assertWorkspaceMember(userId, workspaceId);
-  const hasPermission = await roleHasPermission(workspaceMembership.roleId ?? undefined, permissionKey);
-
-  if (!hasPermission) {
-    throw new AppError(403, "PERMISSION_DENIED", `Missing permission: ${permissionKey}.`);
+  if (member.userType === 'EXTERNAL' && (await getRolePermissions(member.roleId ?? undefined, workspaceId)).some((key) => !externalPermissions.has(key))) {
+    throw new AppError(403, 'EXTERNAL_ROLE_INVALID', 'El acceso externo requiere un rol de cliente, invitado o lectura. Contacta a administración.');
   }
-
-  return workspaceMembership;
+  return member;
 }
-
-export async function hasWorkspacePermission(userId: string, workspaceId: string, permissionKey: PermissionKey) {
+export async function assertWorkspacePermission(userId: string, workspaceId: string, key: PermissionKey) {
+  const member = await assertWorkspaceMember(userId, workspaceId);
+  const permissions = effectivePermissions(await getRolePermissions(member.roleId ?? undefined, workspaceId), undefined, member.userType);
+  if (!permissions.includes(key)) throw new AppError(403, 'PERMISSION_DENIED', 'Tu rol no permite realizar esta acción.');
+  return member;
+}
+export async function hasWorkspacePermission(userId: string, workspaceId: string, key: PermissionKey) {
   const workspaceMembership = await assertWorkspaceMember(userId, workspaceId);
-  const hasPermission = await roleHasPermission(workspaceMembership.roleId ?? undefined, permissionKey);
-
-  return { hasPermission, workspaceMembership };
+  const permissions = effectivePermissions(await getRolePermissions(workspaceMembership.roleId ?? undefined, workspaceId), undefined, workspaceMembership.userType);
+  return { workspaceMembership, hasPermission: permissions.includes(key) };
 }
-
 export async function getWorkspaceMemberLocalityIds(member: { id: string; localityId?: string | null }) {
-  const localityScopes = await prisma.workspaceMemberLocality.findMany({
-    where: { workspaceMemberId: member.id },
-    select: { localityId: true }
-  });
-
-  return [
-    ...new Set([
-      ...localityScopes.map((localityScope) => localityScope.localityId),
-      ...(member.localityId ? [member.localityId] : [])
-    ])
-  ];
+  const scopes = await prisma.workspaceMemberLocality.findMany({ where: { workspaceMemberId: member.id }, select: { localityId: true } });
+  return [...new Set([...scopes.map((scope) => scope.localityId), ...(member.localityId ? [member.localityId] : [])])];
 }
-
-function canEnterProjectByArea(input: {
-  canViewAreaProjects: boolean;
-  projectVisibility: "WORKSPACE" | "PRIVATE";
-  memberAreaId?: string | null;
-  projectAreaId?: string | null;
-  projectLocalityId?: string | null;
-  memberLocalityIds: string[];
-}) {
-  if (
-    !input.canViewAreaProjects ||
-    input.projectVisibility !== "WORKSPACE" ||
-    !input.memberAreaId ||
-    input.projectAreaId !== input.memberAreaId
-  ) {
-    return false;
-  }
-
-  return (
-    input.memberLocalityIds.length === 0 ||
-    !input.projectLocalityId ||
-    input.memberLocalityIds.includes(input.projectLocalityId)
-  );
-}
-
-async function canManageAreaProjects(roleId: string | undefined) {
-  return (await roleHasPermission(roleId, "project.view_all")) || (await roleHasPermission(roleId, "workspace.manage"));
-}
-
-export async function canSeeEveryTaskInProject(workspaceRoleId: string | undefined, projectRoleId?: string) {
-  const workspaceCanSeeAll =
-    (await roleHasPermission(workspaceRoleId, "workspace.manage")) ||
-    (await roleHasPermission(workspaceRoleId, "project.view_all"));
-  const projectCanSeeAll =
-    (await roleHasPermission(projectRoleId, "project.view_all"));
-
-  return workspaceCanSeeAll || projectCanSeeAll;
-}
-
-function requiresTaskScopedVisibility(permissionKey: PermissionKey) {
-  return ["task.view_all", "task.comment", "task.log_time", "task.update_progress", "task.update", "task.assign"].includes(permissionKey);
-}
-
-async function canSeeTaskByAssignmentOrMention(userId: string, taskId: string) {
-  const visibleTaskCount = await prisma.task.count({
-    where: {
-      id: taskId,
-      OR: [
-        { createdById: userId },
-        { assignees: { some: { userId } } },
-        { mentions: { some: { userId } } }
-      ]
-    }
-  });
-
-  return visibleTaskCount > 0;
-}
-
-/**
- * El acceso a proyecto es mas estricto que el acceso a workspace.
- * Colaboradores solo ven proyectos donde fueron agregados.
- * Gerentes ven su area y sus localidades asignadas; Admin/Admin TI ven todo con project.view_all.
- */
 export async function assertProjectAccess(userId: string, projectId: string) {
-  const project = await prisma.project.findFirst({
-    where: {
-      id: projectId,
-      ...activeRecordFilter
-    },
-    include: {
-      members: {
-        where: { userId }
-      }
-    }
-  });
-
-  if (!project) {
-    throw new AppError(404, "PROJECT_NOT_FOUND", "Project not found.");
+  const project = await prisma.project.findFirst({ where: { id: projectId, ...activeRecordFilter }, include: { members: { where: { userId } } } });
+  if (!project) throw new AppError(404, 'PROJECT_NOT_FOUND', 'No se encontró el proyecto.');
+  const workspaceMember = await assertWorkspaceMember(userId, project.workspaceId);
+  const projectMember = project.members[0];
+  const [workspacePermissions, projectPermissions, localityIds] = await Promise.all([
+    getRolePermissions(workspaceMember.roleId ?? undefined, project.workspaceId),
+    projectMember?.roleId ? getRolePermissions(projectMember.roleId, project.workspaceId) : Promise.resolve(undefined),
+    getWorkspaceMemberLocalityIds(workspaceMember)
+  ]);
+  if (!canAccessProject({ active: true, userType: workspaceMember.userType, permissions: workspacePermissions,
+    isMember: Boolean(projectMember), visibility: project.visibility, memberAreaId: workspaceMember.areaId,
+    projectAreaId: project.areaId, projectLocalityId: project.localityId, localityIds })) {
+    throw new AppError(403, 'PROJECT_ACCESS_DENIED', 'No tienes acceso a este proyecto. Solicita que te agreguen como miembro.');
   }
-
-  const workspaceMembership = await assertWorkspaceMember(userId, project.workspaceId);
-  const canViewAllProjects = await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.view_all");
-  const canViewAreaProjects = await canManageAreaProjects(workspaceMembership.roleId ?? undefined);
-  const memberLocalityIds = await getWorkspaceMemberLocalityIds(workspaceMembership);
-  const isProjectMember = Boolean(project.members[0]);
-  const isMentionedInProject = (await prisma.taskMention.count({
-    where: {
-      userId,
-      task: {
-        projectId,
-        ...activeRecordFilter
-      }
-    }
-  })) > 0;
-  const canEnterAreaProject = canEnterProjectByArea({
-    canViewAreaProjects,
-    projectVisibility: project.visibility,
-    memberAreaId: workspaceMembership.areaId,
-    projectAreaId: project.areaId,
-    projectLocalityId: project.localityId,
-    memberLocalityIds
-  });
-
-  if (
-    workspaceMembership.userType === "INTERNAL" &&
-    (canViewAllProjects || isProjectMember || canEnterAreaProject || isMentionedInProject)
-  ) {
-    return { project, workspaceMember: workspaceMembership, projectMember: project.members[0] };
-  }
-
-  const projectMembership = project.members[0];
-
-  if (!projectMembership && !isMentionedInProject) {
-    throw new AppError(403, "PROJECT_ACCESS_DENIED", "You do not have access to this project.");
-  }
-
-  return { project, workspaceMember: workspaceMembership, projectMember: projectMembership };
+  const permissions = effectivePermissions(workspacePermissions, projectPermissions, workspaceMember.userType);
+  return { project, workspaceMember, projectMember, permissions };
 }
-
-export async function assertProjectPermission(
-  userId: string,
-  projectId: string,
-  permissionKey: PermissionKey
-) {
-  const projectAccess = await assertProjectAccess(userId, projectId);
-  const acceptedPermissions = equivalentProjectPermissions(permissionKey);
-  const hasWorkspaceRolePermission = await roleHasAnyPermission(projectAccess.workspaceMember.roleId ?? undefined, acceptedPermissions);
-  const hasProjectRolePermission = await roleHasAnyPermission(projectAccess.projectMember?.roleId ?? undefined, acceptedPermissions);
-
-  if (!hasWorkspaceRolePermission && !hasProjectRolePermission) {
-    throw new AppError(403, "PERMISSION_DENIED", `Missing permission: ${permissionKey}.`);
-  }
-
-  return projectAccess;
+export async function assertProjectPermission(userId: string, projectId: string, key: PermissionKey) {
+  const access = await assertProjectAccess(userId, projectId);
+  if (!access.permissions.includes(key)) throw new AppError(403, 'PERMISSION_DENIED', 'Tu rol no permite realizar esta acción en el proyecto.');
+  return access;
 }
-
-/**
- * Autorizar una tarea siempre implica buscar la tarea y autorizar su proyecto.
- * Esto previene IDOR/BOLA: cambiar :taskId para tocar datos de otra empresa.
- */
-export async function assertTaskPermission(userId: string, taskId: string, permissionKey: PermissionKey) {
-  const task = await prisma.task.findFirst({
-    where: {
-      id: taskId,
-      ...activeRecordFilter
-    }
-  });
-
-  if (!task) {
-    throw new AppError(404, "TASK_NOT_FOUND", "Task not found.");
-  }
-
-  const access = await assertProjectPermission(userId, task.projectId, permissionKey);
-
-  if (
-    requiresTaskScopedVisibility(permissionKey) &&
-    !(await canSeeEveryTaskInProject(access.workspaceMember.roleId ?? undefined, access.projectMember?.roleId ?? undefined)) &&
-    !(await canSeeTaskByAssignmentOrMention(userId, task.id))
-  ) {
-    throw new AppError(403, "TASK_VISIBILITY_DENIED", "You can only access assigned or mentioned tasks.");
-  }
-
-  return { task, ...access };
+export async function canSeeEveryTaskInProject(workspaceRoleId: string | undefined, projectRoleId?: string) {
+  const [workspace, project] = await Promise.all([getRolePermissions(workspaceRoleId), projectRoleId ? getRolePermissions(projectRoleId) : Promise.resolve(undefined)]);
+  return canManageProjectTasks(effectivePermissions(workspace, project, 'INTERNAL'));
 }
-
-/**
- * Regla operativa para tableros: los roles con task.change_status pueden mover
- * cualquier actividad visible, y un usuario asignado puede mover solo sus propias actividades.
- */
-export async function assertTaskStatusChangePermission(userId: string, taskId: string) {
-  const task = await prisma.task.findFirst({
-    where: {
-      id: taskId,
-      ...activeRecordFilter
-    },
-    include: {
-      project: true,
-      assignees: {
-        where: { userId },
-        select: { id: true }
-      }
-    }
-  });
-
-  if (!task || task.project.deletedAt) {
-    throw new AppError(404, "TASK_NOT_FOUND", "Task not found.");
-  }
-
-  const workspaceMembership = await assertWorkspaceMember(userId, task.workspaceId);
-  const projectMembership = await prisma.projectMember.findFirst({
-    where: {
-      projectId: task.projectId,
-      userId
-    }
-  });
-  const canViewAllProjects = await roleHasPermission(workspaceMembership.roleId ?? undefined, "project.view_all");
-  const canViewAreaProjects = await canManageAreaProjects(workspaceMembership.roleId ?? undefined);
-  const memberLocalityIds = await getWorkspaceMemberLocalityIds(workspaceMembership);
-  const hasWorkspacePermission = await roleHasPermission(workspaceMembership.roleId ?? undefined, "task.change_status");
-  const hasProjectPermission = await roleHasPermission(projectMembership?.roleId ?? undefined, "task.change_status");
-  const isAssignedToTask = task.assignees.length > 0;
-  const canEnterAreaProject = canEnterProjectByArea({
-    canViewAreaProjects,
-    projectVisibility: task.project.visibility,
-    memberAreaId: workspaceMembership.areaId,
-    projectAreaId: task.project.areaId,
-    projectLocalityId: task.project.localityId,
-    memberLocalityIds
-  });
-  const canAccessByRole =
-    workspaceMembership.userType === "INTERNAL" &&
-    (canViewAllProjects || Boolean(projectMembership) || canEnterAreaProject);
-
-  if (!canAccessByRole && !projectMembership && !isAssignedToTask) {
-    throw new AppError(403, "PROJECT_ACCESS_DENIED", "You do not have access to this project.");
-  }
-
-  if (!hasWorkspacePermission && !hasProjectPermission && !isAssignedToTask) {
-    throw new AppError(403, "PERMISSION_DENIED", "Only assigned users or authorized roles can change task status.");
-  }
-
-  return {
-    task,
-    project: task.project,
-    workspaceMember: workspaceMembership,
-    projectMember: projectMembership ?? undefined
+export type ProjectAccess = Awaited<ReturnType<typeof assertProjectAccess>>;
+export type PolicyTask = {
+  id: string; createdById?: string | null; completedAt?: Date | string | null; parentTaskId?: string | null;
+  status?: { countsAsDone: boolean }; parentTask?: { completedAt?: Date | null } | null;
+  assignees?: Array<{ userId: string }>; mentions?: Array<{ userId: string }>;
+};
+export function capabilitiesForTask(task: PolicyTask, userId: string, access: ProjectAccess, statuses?: Array<{ id: string; category: string; countsAsDone: boolean }>) {
+  return taskCapabilities({ permissions: access.permissions, userType: access.workspaceMember.userType, hasProjectAccess: true,
+    assigned: Boolean(task.assignees?.some((item) => item.userId === userId)), mentioned: Boolean(task.mentions?.some((item) => item.userId === userId)),
+    creator: task.createdById === userId, done: task.status?.countsAsDone ?? Boolean(task.completedAt),
+    parentDone: Boolean(task.parentTask?.completedAt), isSubtask: Boolean(task.parentTaskId), statuses });
+}
+export async function assertTaskPermission(userId: string, taskId: string, key: PermissionKey) {
+  const task = await prisma.task.findFirst({ where: { id: taskId, ...activeRecordFilter }, include: {
+    status: true, assignees: { select: { userId: true } }, mentions: { select: { userId: true } },
+    parentTask: { select: { completedAt: true } }, board: { select: { statuses: true, deletedAt: true } }
+  } });
+  if (!task || task.board.deletedAt) throw new AppError(404, 'TASK_NOT_FOUND', 'No se encontró la tarea.');
+  const access = await assertProjectAccess(userId, task.projectId);
+  const capabilities = capabilitiesForTask(task, userId, access, task.board.statuses);
+  const allowed: Partial<Record<PermissionKey, boolean>> = {
+    'task.view_all': capabilities.canView, 'task.update': capabilities.canEdit,
+    'task.update_progress': capabilities.canUpdateProgress, 'task.assign': capabilities.canAssign,
+    'task.change_status': capabilities.canChangeStatus, 'task.complete': capabilities.canComplete,
+    'task.reopen': capabilities.canReopen, 'task.comment': capabilities.canComment,
+    'task.log_time': capabilities.canLogTime, 'task.create': capabilities.canCreateSubtasks
   };
+  if (!capabilities.canView || !(allowed[key] ?? access.permissions.includes(key))) {
+    throw new AppError(403, 'TASK_ACTION_DENIED', 'No puedes realizar esta acción: revisa tu rol, asignación y el estado de la tarea.');
+  }
+  return { task, ...access, capabilities };
+}
+export function assertTaskStatusChangePermission(userId: string, taskId: string) {
+  return assertTaskPermission(userId, taskId, 'task.change_status');
+}
+export async function canSeeInternalComments(userId: string, taskId: string) {
+  const access = await assertTaskPermission(userId, taskId, 'task.view_all');
+  return access.capabilities.canSeeInternalComments;
+}
+export async function assertRoleGrant(userId: string, workspaceId: string, roleId: string, userType: 'INTERNAL' | 'EXTERNAL') {
+  const actor = await assertWorkspaceMember(userId, workspaceId);
+  const role = await prisma.role.findFirst({ where: { id: roleId, workspaceId } });
+  if (!role) throw new AppError(400, 'ROLE_INVALID', 'El rol no pertenece a esta empresa.');
+  const [actorPermissions, target] = await Promise.all([getRolePermissions(actor.roleId ?? undefined, workspaceId), getRolePermissions(roleId, workspaceId)]);
+  if (actor.userType !== 'INTERNAL' || !canGrantRole({ actor: actorPermissions, target, userType })) {
+    throw new AppError(403, 'ROLE_GRANT_DENIED', 'No puedes otorgar este nivel de acceso. Solicita el cambio a administración.');
+  }
+  return role;
 }
 
-export async function canSeeInternalComments(userId: string, taskId: string) {
-  const { workspaceMember } = await assertTaskPermission(userId, taskId, "task.view_all");
-  return workspaceMember.userType === "INTERNAL";
+export async function projectVisibilityFilter(userId: string, member: Awaited<ReturnType<typeof assertWorkspaceMember>>) {
+  const permissions = await getRolePermissions(member.roleId ?? undefined, member.workspaceId);
+  const members = { members: { some: { userId } } };
+  if (member.userType === 'EXTERNAL') return members;
+  if (permissions.includes('workspace.manage') || permissions.includes('project.view_all')) return {};
+  if (!permissions.includes('project.view_area') || !member.areaId) return members;
+  const localityIds = await getWorkspaceMemberLocalityIds(member);
+  return { OR: [members, { visibility: 'WORKSPACE' as const, areaId: member.areaId,
+    ...(localityIds.length ? { OR: [{ localityId: null }, { localityId: { in: localityIds } }] } : {}) }] };
 }
