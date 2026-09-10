@@ -5,7 +5,11 @@
 - Helmet para headers de seguridad.
 - `x-powered-by` deshabilitado.
 - CORS con allowlist.
-- Rate limit global y rate limit mas estricto en auth.
+- Rate limit solo en `/api/v1`: identidad JWT verificada por usuario, con 1200 consultas/minuto y 300 escrituras/minuto en contadores separados. Sin token válido: 600 solicitudes/minuto por IP.
+- Login: solo fallos de credenciales/validación, hasta 15 por correo + IP en 15 minutos y 100 por IP en 5 minutos. Sesiones válidas no consumen intentos fallidos.
+- Refresh e invitaciones usan contadores independientes: 200 y 100 fallos por IP en 5 minutos, respectivamente. Respuestas 429 de otro limitador y fallos del servidor no consumen esos intentos.
+- Nginx local es el proxy de confianza (`loopback`). `/health`, archivos de la PWA y conexiones Socket.IO no consumen la cuota HTTP de la API. Socket.IO conserva su protección propia de cambios de sala.
+- Un 429 real incluye JSON en español y `Retry-After`; el cliente evita reintentos inmediatos y respeta la espera al renovar la sesión.
 - Body limit de 1 MB.
 - `hpp` contra parameter pollution.
 - Request id por respuesta.

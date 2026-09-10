@@ -24,11 +24,13 @@ export type AuthSessionExpiredDetail = {
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  readonly retryAfterSeconds?: number;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, retryAfterSeconds?: number) {
     super(message);
     this.status = status;
     this.code = code;
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -128,6 +130,16 @@ export async function apiRequest<T>(path: string, options: ApiRequestOptions = {
       "NETWORK_ERROR",
       "No se pudo conectar con la API. Revisa que el backend este activo."
     );
+  }
+
+  if (response.status === 429) {
+    const retryHeader = response.headers.get("Retry-After");
+    const retryValue = retryHeader ? Number(retryHeader) : NaN;
+    const retryDate = retryHeader ? Date.parse(retryHeader) : NaN;
+    const retryAfterSeconds = Math.max(1, Math.ceil(Number.isFinite(retryValue) ? retryValue : Number.isFinite(retryDate) ? (retryDate - Date.now()) / 1000 : 60));
+    // Proxies can return plain text/HTML here; preserve the real status instead of a JSON error.
+    const body = await response.json().catch(() => undefined) as ApiErrorBody | undefined;
+    throw new ApiError(429, "RATE_LIMITED", body?.error?.message || `Espera ${retryAfterSeconds} segundos antes de volver a intentarlo.`, retryAfterSeconds);
   }
 
   const payload = await parseJsonResponse<T & ApiErrorBody>(response);

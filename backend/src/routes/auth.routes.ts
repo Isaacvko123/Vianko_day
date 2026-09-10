@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticationRateLimit } from "../config/security.js";
+import { authenticationRateLimit, invitationRateLimit, loginAccountRateLimit, refreshRateLimit } from "../config/security.js";
 import {
   acceptInvitation,
   login,
@@ -17,10 +17,10 @@ import {
 
 export const authRouter = Router();
 
-authRouter.post("/login", authenticationRateLimit, validate(loginSchema), asyncHandler(login));
-authRouter.post("/refresh", authenticationRateLimit, validate(refreshSchema), asyncHandler(refresh));
+authRouter.post("/login", authenticationRateLimit, loginAccountRateLimit, validate(loginSchema), asyncHandler(login));
+authRouter.post("/refresh", refreshRateLimit, validate(refreshSchema), asyncHandler(refresh));
 authRouter.post("/logout", validate(logoutSchema), asyncHandler(logout));
-authRouter.post("/accept-invitation", authenticationRateLimit, validate(acceptInvitationSchema), asyncHandler(acceptInvitation));
+authRouter.post("/accept-invitation", invitationRateLimit, validate(acceptInvitationSchema), asyncHandler(acceptInvitation));
 // New accounts are provisioned by invitation; no public organizational directory.
 authRouter.all(['/workspaces', '/registration-options', '/request-access'], (_req, res) => {
   res.status(403).json({ error: { code: 'INVITATION_REQUIRED', message: 'Solicita una invitación al administrador de tu empresa para obtener acceso.' } });

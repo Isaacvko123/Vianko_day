@@ -15,11 +15,15 @@ const querySchema = z.object({
   tomorrow: z.string().datetime().optional(),
   search: z.string().trim().max(150).default(''),
   projectId: z.string().uuid().optional(),
+  timeline: z.enum(['period', 'overdue', 'undated']).optional(),
+  from: z.string().datetime().optional(),
+  to: z.string().datetime().optional(),
   completedFrom: z.string().datetime().optional(),
   completedTo: z.string().datetime().optional(),
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(25)
-}).refine(q => !q.completedFrom || !q.completedTo || q.completedFrom <= q.completedTo, 'La fecha inicial debe ser anterior a la final.');
+}).refine(q => !q.completedFrom || !q.completedTo || q.completedFrom <= q.completedTo, 'La fecha inicial debe ser anterior a la final.')
+  .refine(q => q.timeline !== 'period' || Boolean(q.from && q.to && Date.parse(q.to) > Date.parse(q.from) && Date.parse(q.to) - Date.parse(q.from) <= 94 * 86400000), 'El calendario debe tener un período válido de hasta tres meses.');
 
 export async function listWorkItems(req: Request, res: Response) {
   const workspaceId = getParam(req, 'workspaceId');
@@ -48,16 +52,30 @@ export async function listWorkItems(req: Request, res: Response) {
   const scope = { ...where };
   const focusFilter = query.focus === 'today' ? { dueAt: { gte: today, lt: tomorrow } } : query.focus === 'overdue' ? { dueAt: { lt: today } } : {};
   Object.assign(where, focusFilter);
-  const [total, tasks, activeTotal, dueToday, overdue] = await prisma.$transaction([
+  if (query.timeline) {
+    const timelineFilter: Prisma.TaskWhereInput = query.timeline === 'undated'
+      ? { startAt: null, dueAt: null }
+      : query.timeline === 'overdue'
+        ? { dueAt: { lt: today } }
+        : { OR: [
+          { startAt: { lt: new Date(query.to!) }, dueAt: { gte: new Date(query.from!) } },
+          { startAt: null, dueAt: { gte: new Date(query.from!), lt: new Date(query.to!) } },
+          { dueAt: null, startAt: { gte: new Date(query.from!), lt: new Date(query.to!) } }
+        ] };
+    // Keep every existing permission and assignment restriction when filtering the timeline.
+    where.AND = [...(Array.isArray(where.AND) ? where.AND : []), timelineFilter];
+  }
+  const [total, tasks, activeTotal, dueToday, overdue, undated] = await prisma.$transaction([
     prisma.task.count({ where }),
     prisma.task.findMany({ where, take: query.limit, skip: (query.page - 1) * query.limit,
       orderBy: query.state === 'completed' ? [{ completedAt: 'desc' }, { id: 'asc' }] : [{ dueAt: { sort: 'asc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'asc' }],
-      select: { id: true, projectId: true, title: true, priority: true, dueAt: true, completedAt: true, progress: true,
+      select: { id: true, projectId: true, title: true, priority: true, startAt: true, dueAt: true, completedAt: true, progress: true,
         status: { select: { name: true, color: true, category: true } }, project: { select: { id: true, name: true, color: true } },
         assignees: { select: { user: { select: { id: true, name: true } } } } } }),
     prisma.task.count({ where: scope }),
     prisma.task.count({ where: { ...scope, dueAt: { gte: today, lt: tomorrow } } }),
-    prisma.task.count({ where: { ...scope, dueAt: { lt: today } } })
+    prisma.task.count({ where: { ...scope, dueAt: { lt: today } } }),
+    ...(query.timeline ? [prisma.task.count({ where: { ...scope, startAt: null, dueAt: null } })] : [])
   ], { isolationLevel: 'RepeatableRead' });
-  res.json({ tasks, total, summary: { total: activeTotal, today: dueToday, overdue }, page: query.page, pages: Math.max(1, Math.ceil(total / query.limit)), projects: visible.map(({ project: { members: _members, ...project } }) => project) });
+  res.json({ tasks, total, summary: { total: activeTotal, today: dueToday, overdue, undated }, page: query.page, pages: Math.max(1, Math.ceil(total / query.limit)), projects: visible.map(({ project: { members: _members, ...project } }) => project) });
 }
